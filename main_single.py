@@ -1,5 +1,6 @@
 """
-Implementation of GRPO, DeepSeek style training without external libraries 
+Implementation of GRPO, DeepSeek style training without external libraries
+Simplified version with standard generation only (no mixture of tokens)
 """
 import os
 import json
@@ -8,12 +9,10 @@ import argparse
 from tqdm import tqdm
 from collections import defaultdict
 from transformers import PreTrainedModel, PreTrainedTokenizerBase, GenerationConfig
-import torch.nn.functional as F
 import llms
 import utils
 import evaluator
 import rldatasets
-import pdb
 
 def eval_on_test_set(
     model: PreTrainedModel,
@@ -57,15 +56,10 @@ def eval_on_test_set(
     with open(log_file, 'w') as f:
         # Run through test set
         for question, answer, entry in tqdm(test_loader, desc="Evaluating on test set"):
-            # Generate completions using same function as training
-            if args.normal_generation:
-                prompt_completion_ids, prompt_ids, completion_ids, attention_mask, completions_text, prompt_text = generate_completions(
-                    model, tokenizer, question, device, args
-                )
-            else:
-                prompt_completion_ids, prompt_ids, completion_ids, attention_mask, completions_text, prompt_text, generation_log, token_embeddings_list, mixture_selected_tokens = generate_completions(
-                    model, tokenizer, question, device, args
-                )
+            # Generate completions using standard generation
+            prompt_completion_ids, prompt_ids, completion_ids, attention_mask, completions_text, prompt_text = generate_completions(
+                model, tokenizer, question, device, args
+            )
             
             # Score completions using evaluator
             mock_prompts = [[{'content': question}]] * len(completions_text)
@@ -99,11 +93,6 @@ def eval_on_test_set(
             for metric, value in metrics.items():
                 f.write(f"{metric}: {value}\n")
             f.write(f"Total Score: {rewards_per_func.sum().item()}\n")
-            
-            # Log generation details if verbose
-            if args.verbose and generation_log:
-                f.write(f"Phase transitions: {generation_log.get('phase_transitions', [])}\n")
-                f.write(f"Final sequence lengths: {generation_log.get('final_sequences', {}).get('sequence_lengths', [])}\n")
 
     # Calculate averages
     avg_scores = {k: v/num_examples for k,v in total_scores.items()}
@@ -124,267 +113,15 @@ def eval_on_test_set(
 
     return avg_scores, accuracy
 
-@torch.no_grad()
-def generate_with_embeddings(
-    model: PreTrainedModel,
-    tokenizer: PreTrainedTokenizerBase,
-    prompt_ids: torch.Tensor,
-    prompt_mask: torch.Tensor,
-    device: str,
-    args: argparse.Namespace,
-) -> tuple[torch.Tensor, dict]:
-    """
-    Generate completions by sampling tokens and feeding their embeddings back to the model.
-    
-    Returns:
-        prompt_completion_ids: The generated sequences
-        generation_log: Dictionary containing detailed generation information
-    """
-    num_chains = args.num_chains
-    max_completion_length = args.max_completion_length
-    temperature = args.temperature
-    k = args.mixture_k
-    
-    # Get initial state from prompt
-    outputs = model(input_ids=prompt_ids, attention_mask=prompt_mask, use_cache=True, return_dict=True)
-    
-    past_key_values = outputs.past_key_values
-    
-    # Get next token logits
-    next_token_logits = outputs.logits[:, -1, :]
-    token_embeddings_list = [[] for _ in range(num_chains)]
-    for i in range(num_chains):
-        token_embeddings_list[i].append(model.get_input_embeddings()(prompt_ids[i]))
-    # Store generated tokens for each chain
-    generated_sequences = [[] for _ in range(num_chains)]
-    mixture_selected_tokens = [[] for _ in range(num_chains)]
-    # Keep track of running chains
-    model_device = next(model.parameters()).device
-    running_chains = torch.ones(num_chains, dtype=torch.bool, device=model_device)
-    
-    # State for mixture vs normal generation
-    is_mixture_phase = torch.ones(num_chains, dtype=torch.bool, device=model_device)
-    try:
-        think_end_token_ids = tokenizer.encode("</think>", add_special_tokens=False)
-    except:
-        print("Warning: Could not find </think> token. Mixture phase will run for all tokens.")
-        think_end_token_ids = []
-
-    # Initialize logging structures
-    generation_log = {
-        'generation_steps': [],  # List of step-by-step generation info
-        'phase_transitions': [],  # When each chain switched from mixture to normal
-        'think_end_token_ids': think_end_token_ids,
-        'num_chains': num_chains,
-        'max_completion_length': max_completion_length,
-        'temperature': temperature
-    }
-    for step in range(max_completion_length):
-        if not running_chains.any():
-            break
-            
-        # Apply temperature
-        scaled_logits = next_token_logits / temperature
-        probs = F.softmax(scaled_logits, dim=-1)
-        
-        # Initialize step log
-        step_log = {
-            'step': step,
-            'chains': []
-        }
-        
-        # --- Mixture Path (for chains where is_mixture_phase is True) ---
-        top_k_probs, top_k_indices = torch.topk(probs, k, dim=-1)
-        normalized_probs = top_k_probs / top_k_probs.sum(dim=-1, keepdim=True)
-        top_k_embeddings = model.get_input_embeddings()(top_k_indices)
-        ### Sampling Nucleus Wise 
-        if "nucleus" in args.experiment_name:
-            nucleus_sampling_threshold = 0.9
-            normalized_probs = torch.cumsum(normalized_probs, dim=-1)
-            normalized_probs = torch.where(normalized_probs > nucleus_sampling_threshold, top_k_probs, torch.zeros_like(normalized_probs))
-            normalized_probs = normalized_probs / normalized_probs.sum(dim=-1, keepdim=True)
-        ### Mixing Dirichlet Wise
-        if "dirichlet" in args.experiment_name:
-            normalized_probs = torch.distributions.Dirichlet(normalized_probs).sample()        
-        if "different_tokens" in args.experiment_name:
-            k_tokens = torch.multinomial(probs, num_samples=k)
-            top_k_embeddings = model.get_input_embeddings()(k_tokens)
-            top_k_probs = torch.gather(probs, dim=1, index=k_tokens)
-            normalized_probs = top_k_probs / top_k_probs.sum(dim=-1, keepdim=True) 
-        ### Mixing Element Wise Max Wise
-        if "element_wise_max" in args.experiment_name:
-            mixture_embedding = top_k_embeddings.max(dim=1, keepdim=True).values
-        else: 
-            mixture_embedding = (top_k_embeddings * normalized_probs.unsqueeze(-1)).sum(dim=1, keepdim=True)
-        mixture_representative_idx = torch.multinomial(normalized_probs, num_samples=1)
-        mixture_next_token = torch.gather(top_k_indices, 1, mixture_representative_idx)
-
-        # --- Normal Sampling Path (for chains where is_mixture_phase is False) ---
-        normal_next_token = torch.multinomial(probs, num_samples=1)
-        normal_embedding = model.get_input_embeddings()(normal_next_token)
-
-        # --- Select embedding and next token based on phase ---
-        is_mixture_phase_b = is_mixture_phase.unsqueeze(1)
-        
-        token_embeddings = torch.where(
-            is_mixture_phase_b.unsqueeze(2),
-            mixture_embedding,
-            normal_embedding
-        )
-        next_token = torch.where(
-            is_mixture_phase_b,
-            mixture_next_token,
-            normal_next_token
-        )
-        
-        # Store token and check for </think> to switch phase
-        len_think_end = len(think_end_token_ids)
-        for i in range(num_chains):
-            if running_chains[i]:
-                token_id = next_token[i].item()
-                generated_sequences[i].append(token_id)
-                if "different_tokens" in args.experiment_name:
-                    if is_mixture_phase[i]:
-                        mixture_token_ids = k_tokens[i]
-                        mixture_selected_tokens[i].append(mixture_token_ids)
-                    else:
-                        mixture_selected_tokens[i].append(torch.full((args.mixture_k,), token_id, dtype=torch.long, device=model_device))
-
-                # Log detailed information for this chain at this step
-                chain_log = {
-                    'chain_id': i,
-                    'is_mixture_phase': is_mixture_phase[i].item(),
-                    'selected_token_id': token_id,
-                    'selected_token_text': tokenizer.decode([token_id]),
-                    'is_running': True
-                }
-                if "different_tokens" in args.experiment_name:
-                    chain_log.update({
-                        'mixture_selected_tokens': mixture_selected_tokens[i][-1].tolist(),
-                    })
-                
-                if is_mixture_phase[i]:
-                    # Log mixture-specific information
-                    chain_log.update({
-                        'top_k_token_ids': top_k_indices[i].tolist(),
-                        'top_k_token_texts': [tokenizer.decode([tid]) for tid in top_k_indices[i].tolist()],
-                        'top_k_probs': top_k_probs[i].tolist(),
-                        'normalized_mixture_weights': normalized_probs[i].tolist(),
-                        'representative_idx': mixture_representative_idx[i].item()
-                    })
-                else:
-                    # Log normal sampling information
-                    chain_log.update({
-                        'sampled_prob': probs[i, token_id].item()
-                    })
-
-                # Check if we should switch from mixture to normal generation
-                if is_mixture_phase[i] and len_think_end > 0:
-                    # Check for exact token sequence match
-                    token_match = False
-                    if len(generated_sequences[i]) >= len_think_end:
-                        if generated_sequences[i][-len_think_end:] == think_end_token_ids:
-                            token_match = True
-                    
-                    # Check for "</think>" text in generated content
-                    text_match = False
-                    if len(generated_sequences[i]) > 0:
-                        generated_text = tokenizer.decode(generated_sequences[i], skip_special_tokens=True)
-                        if "</think>" in generated_text:
-                            text_match = True
-                    
-                    # Switch to normal generation if either condition is met
-                    if token_match or text_match:
-                        is_mixture_phase[i] = False
-                        chain_log['phase_transition'] = True
-                        generation_log['phase_transitions'].append({
-                            'chain_id': i,
-                            'step': step,
-                            'token_position': len(generated_sequences[i]),
-                            'trigger': 'token_match' if token_match else 'text_match'
-                        })
-                        if args.verbose:
-                            trigger_type = "token sequence" if token_match else "text content"
-                            print(f"Chain {i} finished mixture phase at step {step} (triggered by {trigger_type}).")
-                
-                step_log['chains'].append(chain_log)
-                token_embeddings_list[i].append(token_embeddings[i])
-            else:
-                # Chain not running
-                token_embeddings_list[i].append(torch.zeros(1, model.config.hidden_size, device=model_device,dtype=torch.bfloat16))
-                step_log['chains'].append({
-                    'chain_id': i,
-                    'is_running': False
-                })
-        
-        generation_log['generation_steps'].append(step_log)
-        
-        # Update running chains based on the representative token
-        running_chains &= (next_token.squeeze(1) != tokenizer.eos_token_id)
-        
-        if not running_chains.any():
-            break
-            
-        # Forward pass with the selected embedding
-        
-
-        outputs = model(
-            inputs_embeds=token_embeddings,
-            past_key_values=past_key_values,
-            use_cache=True,
-            return_dict=True
-        )
-        
-        past_key_values = outputs.past_key_values
-        next_token_logits = outputs.logits[:, -1, :]
-    token_embeddings_list = [torch.cat(emb,dim=0).to(model.device) for emb in token_embeddings_list]
-    token_embeddings_list = torch.stack(token_embeddings_list)
-
-    # After the loop, pad the shorter sequences.
-    max_len = 0
-    if generated_sequences:
-        max_len = max(len(tokens) for tokens in generated_sequences if tokens)
-
-    if max_len > 0:
-        padded_generated_ids = []
-        for tokens in generated_sequences:
-            padding_needed = max_len - len(tokens)
-            padded_tokens = tokens + [tokenizer.pad_token_id] * padding_needed
-            padded_generated_ids.append(padded_tokens)
-        
-        generated_ids = torch.tensor(padded_generated_ids, device=model_device, dtype=torch.long)
-        prompt_completion_ids = torch.cat([prompt_ids, generated_ids], dim=1)
-    
-        # Pad mixture_selected_tokens
-        for sel_list in mixture_selected_tokens:
-            padding_needed = max_len - len(sel_list)
-            for _ in range(padding_needed):
-                sel_list.append(torch.full((args.mixture_k,), tokenizer.pad_token_id, dtype=torch.long, device=model_device))
-    
-        # Convert to tensors with proper shape for gather
-        selected_tokens = [torch.stack(sel_list, dim=0).unsqueeze(-1) for sel_list in mixture_selected_tokens]
-    else:
-        # No tokens were generated
-        prompt_completion_ids = prompt_ids
-        selected_tokens = [torch.tensor([], dtype=torch.long, device=model_device) for _ in range(num_chains)]  # Empty for no generation
-
-    # Add final summary to generation log
-    generation_log['final_sequences'] = {
-        'token_ids': [seq for seq in generated_sequences],
-        'decoded_texts': [tokenizer.decode(seq, skip_special_tokens=True) for seq in generated_sequences],
-        'sequence_lengths': [len(seq) for seq in generated_sequences]
-    }
-    return prompt_completion_ids, generation_log, token_embeddings_list, selected_tokens
-
 def generate_completions(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizerBase, 
     question: str,
     device: str,
     args: argparse.Namespace
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, list[str], str, dict | None, torch.Tensor | None, torch.Tensor | None]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, list[str], str]:
     """
-    Generate multiple completion sequences for a given prompt using a language model.
+    Generate multiple completion sequences for a given prompt using standard generation.
     
     Args:
         model: The language model to use for generation
@@ -400,10 +137,8 @@ def generate_completions(
         attention_mask: Attention mask tensor for the full sequence
         completions_text: List of decoded completion texts
         prompt_text: The full formatted prompt text
-        generation_log: Dictionary containing detailed generation information
     """
     # 1. Prepare prompting
-    
     prompt = [
         {'role': 'system', 'content': args.system_prompt},
         {'role': 'user', 'content': question},
@@ -433,20 +168,13 @@ def generate_completions(
         temperature=args.temperature,
         pad_token_id=tokenizer.pad_token_id
     )
-    token_embeddings_list = None
-    if args.normal_generation:
-        # Generate completions
-        prompt_completion_ids = model.generate(prompt_ids,attention_mask=prompt_mask,generation_config=generation_config)
-    else:   
-        # Generate completions
-        prompt_completion_ids, generation_log, token_embeddings_list, selected_tokens = generate_with_embeddings(
-            model,
-            tokenizer,
-            prompt_ids,
-            prompt_mask,
-            device,
-            args
-        )
+    
+    # Generate completions using standard generation
+    prompt_completion_ids = model.generate(
+        prompt_ids,
+        attention_mask=prompt_mask,
+        generation_config=generation_config
+    )
 
     # Extract completion ids
     prompt_length = prompt_ids.size(1)
@@ -464,11 +192,9 @@ def generate_completions(
 
     # Decode completions
     completions_text = tokenizer.batch_decode(completion_ids, skip_special_tokens=True)
-    if args.normal_generation:
-        return prompt_completion_ids, prompt_ids, completion_ids, attention_mask, completions_text, prompt_text
-    else: 
-        return prompt_completion_ids, prompt_ids, completion_ids, attention_mask, completions_text, prompt_text, generation_log, token_embeddings_list, selected_tokens
     
+    return prompt_completion_ids, prompt_ids, completion_ids, attention_mask, completions_text, prompt_text
+
 def score_completions(
     completions_text: list[str],
     question: str,
@@ -488,6 +214,7 @@ def score_completions(
         eval_class: Evaluator class for computing rewards
         device: Device to place tensors on
         args: Training arguments
+        entry: Optional dataset entry for additional context
         
     Returns:
         rewards: Raw reward scores for each completion
@@ -519,6 +246,7 @@ def score_completions(
         entry=entry
     )
     rewards = rewards_per_func.sum(dim=1)
+    
     # Store generation data
     for i, (completion, reward_scores) in enumerate(zip(completions_text, rewards_per_func)):
         generation_data = {
@@ -553,13 +281,11 @@ def compute_loss(
     model: PreTrainedModel,
     base_model: PreTrainedModel, 
     prompt_completion_ids: torch.Tensor,
-    token_embeddings_list: torch.Tensor | None,
     prompt_ids: torch.Tensor,
     completion_ids: torch.Tensor,
     attention_mask: torch.Tensor,
     completion_mask: torch.Tensor,
     advantages: torch.Tensor,
-    selected_tokens: torch.Tensor | None,
     args: argparse.Namespace
 ) -> tuple[torch.Tensor, dict[str, float]]:
     """
@@ -574,32 +300,31 @@ def compute_loss(
         attention_mask: Attention mask for the full sequence
         completion_mask: Mask indicating which tokens are from the completion
         advantages: Advantage values for each sequence
-        selected_tokens: Selected tokens for each chain
         args: Training arguments
         
     Returns:
         loss: The computed GRPO loss
         metrics: Dictionary containing additional metrics like KL divergence
     """
-
     # Only need the generated tokens' logits
     logits_to_keep = completion_ids.size(1)
+    
     with torch.inference_mode():
-        if args.normal_generation:
-            ref_per_token_logps = utils.get_per_token_logps(base_model, prompt_completion_ids, attention_mask, logits_to_keep)
-        elif "different_tokens" in args.experiment_name:
-            ref_per_token_logps = utils.get_per_token_logps_with_embeddings_on_selected_tokens(base_model, token_embeddings_list, selected_tokens, prompt_completion_ids, attention_mask, logits_to_keep)
-        else:
-            ref_per_token_logps = utils.get_per_token_logps_with_embeddings(base_model, token_embeddings_list, prompt_completion_ids, attention_mask, logits_to_keep, top_k=args.mixture_k, loss_on_all_tokens=args.loss_on_all_tokens)
+        ref_per_token_logps = utils.get_per_token_logps(
+            base_model, 
+            prompt_completion_ids, 
+            attention_mask, 
+            logits_to_keep
+        )
 
     # Get training model logits
     input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
-    if args.normal_generation:
-        per_token_logps = utils.get_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
-    elif "different_tokens" in args.experiment_name:
-        per_token_logps = utils.get_per_token_logps_with_embeddings_on_selected_tokens(model, token_embeddings_list, selected_tokens, input_ids, attention_mask, logits_to_keep)
-    else:
-        per_token_logps = utils.get_per_token_logps_with_embeddings(model, token_embeddings_list, input_ids, attention_mask, logits_to_keep, top_k=args.mixture_k, loss_on_all_tokens=args.loss_on_all_tokens)
+    per_token_logps = utils.get_per_token_logps(
+        model, 
+        input_ids, 
+        attention_mask, 
+        logits_to_keep
+    )
 
     # Compute KL divergence
     per_token_kl = torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
@@ -630,7 +355,7 @@ def grpo_loss(
         training_log_dir: str, 
         args: argparse.Namespace,
         entry: dict | None = None
-) -> tuple[torch.Tensor, dict[str, float], float]:
+) -> tuple[torch.Tensor, dict[str, float]]:
     """
     Compute GRPO loss between the current model and base model.
     
@@ -645,53 +370,32 @@ def grpo_loss(
         round_num: Current training round number
         training_log_dir: Directory to save training logs
         args: Training arguments
+        entry: Optional dataset entry for additional context
         
     Returns:
         loss: The computed GRPO loss
         metrics: Dictionary containing training metrics
-        reward: The total reward for this batch
     """
     # Generate completions
-    if args.normal_generation:
-        prompt_completion_ids, prompt_ids, completion_ids, attention_mask, completions_text, prompt_text = generate_completions(
-            model, tokenizer, question, device, args
-        )
-    else:
-        prompt_completion_ids, prompt_ids, completion_ids, attention_mask, completions_text, prompt_text, generation_log, token_embeddings_list, selected_tokens = generate_completions(
-            model, tokenizer, question, device, args
-        )
+    prompt_completion_ids, prompt_ids, completion_ids, attention_mask, completions_text, prompt_text = generate_completions(
+        model, tokenizer, question, device, args
+    )
 
     # Score completions
     rewards, advantages, rewards_per_func, metrics, log_data = score_completions(
         completions_text, question, answer, eval_class, device, args, entry
     )
 
-    # Add generation log to the log data
-    log_data['generation_log'] = generation_log if not args.normal_generation else None
-
     # Write log data
     log_file = os.path.join(training_log_dir, f'{round_num}_generations.txt')
-    utils.write_generation_log(log_data, log_file,args.dataset)
-    
-    # Also save detailed generation log as JSON for analysis
-    if not args.normal_generation:
-        detailed_log_file = os.path.join(training_log_dir, f'{round_num}_detailed_generation.json')
-        
-        with open(detailed_log_file, 'w') as f:
-            json.dump(generation_log, f, indent=2)
+    utils.write_generation_log(log_data, log_file, args.dataset)
 
     # Compute loss
     completion_mask = attention_mask[:, prompt_ids.size(1):]
-    if args.normal_generation:
-        loss, loss_metrics = compute_loss(
-            model, base_model, prompt_completion_ids, None, prompt_ids, completion_ids,
-            attention_mask, completion_mask, advantages,None, args
-        )
-    else:
-        loss, loss_metrics = compute_loss(
-            model, base_model, prompt_completion_ids, token_embeddings_list, prompt_ids, completion_ids,
-            attention_mask, completion_mask, advantages, selected_tokens, args
-        )
+    loss, loss_metrics = compute_loss(
+        model, base_model, prompt_completion_ids, prompt_ids, completion_ids,
+        attention_mask, completion_mask, advantages, args
+    )
 
     # Combine metrics
     metrics.update(loss_metrics)
@@ -700,17 +404,8 @@ def grpo_loss(
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="GRPO training arguments")
-    default_system_prompt =  """
-Respond in the following format only:
-<think>
-...
-</think>
-<answer>
-...
-</answer>
-"""
-    default_system_prompt =  """You will be given a question that involves reasoning. You should first think about different approaches to solve the question, then reason about those approaches step by step and finally provide your answer.
+    parser = argparse.ArgumentParser(description="GRPO training arguments (simplified - standard generation only)")
+    default_system_prompt = """You will be given a question that involves reasoning. You should first think about different approaches to solve the question, then reason about those approaches step by step and finally provide your answer.
     Think in roughly 200-400 words.
             It is very important that you put your reasoning process inside <think> tags and your final answer inside <answer> tags, like this:
             <think>
@@ -721,6 +416,7 @@ Respond in the following format only:
             </answer>
             All of your returned text should either be in the <think> or <answer> tags - no text outside! Start each answer by immediately starting with <think>. 
             It is is extremely important you answer in this way - do not put any information or text outside of these tags!"""
+    
     # Model configuration
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-1.5B-Instruct", help="Name/path of base model")
     parser.add_argument("--dataset", type=str, default="gsm8k", help="Dataset to use for training (e.g., gsm8k, math500)")
@@ -728,7 +424,7 @@ Respond in the following format only:
     parser.add_argument("--eval_environments", type=str, nargs='+', default=None, help="List of evaluation environments (e.g., gsm8k math500 reasoning_gym.acre). If not specified, uses --dataset")
 
     # Output and logging
-    parser.add_argument("--output_dir", type=str, default="output_new", help="Directory to save outputs")
+    parser.add_argument("--output_dir", type=str, default="output_single", help="Directory to save outputs")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
     parser.add_argument("--save_steps", type=int, default=100, help="Save model every N steps")
     parser.add_argument("--eval_iterations", type=int, default=20, help="Number of iterations for evaluation")
@@ -745,7 +441,6 @@ Respond in the following format only:
     parser.add_argument("--update_ref_model_freq", type=int, default=200, help="How often to update reference model")
     parser.add_argument("--ref_model_mixup_alpha", type=float, default=0.1, help="Alpha parameter for reference model mixup")
 
-
     # Generation parameters
     parser.add_argument("--temperature", type=float, default=0.9, help="Sampling temperature")
     parser.add_argument("--num_chains", type=int, default=16, help="Number of parallel generation chains")
@@ -756,14 +451,10 @@ Respond in the following format only:
     parser.add_argument("--num_train_iters", type=int, default=1000, help="Number of training iterations")
     parser.add_argument("--kl_weight_beta", type=float, default=0.1, help="KL penalty weight")
     parser.add_argument("--seed", type=int, default=7111994, help="Random seed")
-    parser.add_argument("--mixture_k", type=int, default=2, help="Mixture k")
-    parser.add_argument("--loss_on_all_tokens", type=int, default=0, help="Loss on all tokens")
+    
     # Flash attention parameters
     parser.add_argument("--use_flash_attention", type=int, default=1, help="Use flash attention")
     parser.add_argument("--system_prompt", type=str, default=default_system_prompt, help="System prompt")   
-    
-    parser.add_argument("--normal_generation", type=int, default=0, help="Use normal generation")
-    parser.add_argument("--experiment_name", type=str, default="different_tokens_1.5b_reasoning_gym_evaluator", help="Experiment name")
     parser.add_argument("--checkpoint_frequency", type=int, default=200, help="Save model checkpoint every N iterations")
 
     args = parser.parse_args()
@@ -787,8 +478,8 @@ if __name__ == "__main__":
     ###############################
 
     ## Set which model to train 
-    model, tokenizer = llms.get_llm_tokenizer(args.model_name, device,use_flash_attention=args.use_flash_attention)
-    base_model, _ = llms.get_llm_tokenizer(args.model_name, device,use_flash_attention=args.use_flash_attention)
+    model, tokenizer = llms.get_llm_tokenizer(args.model_name, device, use_flash_attention=args.use_flash_attention)
+    base_model, _ = llms.get_llm_tokenizer(args.model_name, device, use_flash_attention=args.use_flash_attention)
     
     # Store original parameters for hard reset
     original_base_model_params = {}
@@ -826,9 +517,8 @@ if __name__ == "__main__":
 
     ###############################
 
-
     # Setup logging 
-    output_dir = args.output_dir #if args.normal_generation else os.path.join(args.output_dir, args.experiment_name)
+    output_dir = args.output_dir
     os.makedirs(output_dir, exist_ok=True)
     args_dict = vars(args)
     args_path = os.path.join(output_dir, 'args.json')
@@ -840,7 +530,6 @@ if __name__ == "__main__":
     os.makedirs(train_log_dir, exist_ok=True)
     checkpoint_dir = os.path.join(output_dir, 'model_checkpoints')
     os.makedirs(checkpoint_dir, exist_ok=True)
-
 
     # Setup optimizer for trainer agent with GRPO config settings
     optimizer = torch.optim.AdamW(
@@ -857,13 +546,24 @@ if __name__ == "__main__":
         if step < warmup_steps:
             return (step / warmup_steps)
         return 1.0
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer,lr_lambda=get_lr)
-
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=get_lr)
 
     # Begin training 
     accumulated_loss = 0
     optimizer.zero_grad()
     train_metrics_total = {}
+    
+    print("\n" + "="*80)
+    print("Starting GRPO Training (Standard Generation Only)")
+    print("="*80)
+    print(f"Model: {args.model_name}")
+    print(f"Training Dataset: {args.dataset}")
+    print(f"Evaluation Environments: {list(eval_envs.keys())}")
+    print(f"Number of chains: {args.num_chains}")
+    print(f"Total iterations: {args.num_train_iters}")
+    print(f"Evaluation every: {args.eval_iterations} iterations")
+    print("="*80 + "\n")
+    
     for round_num in tqdm(range(args.num_train_iters), desc="Training Progress"):
         
         # Evaluate on test set every so often 
@@ -926,10 +626,12 @@ if __name__ == "__main__":
             print(f"Restarted from beginning. Question: {question}")
 
         # Do GRPO - generate chains, score, compute advantage, compute loss 
-        total_loss, train_metrics = grpo_loss(model, base_model, tokenizer, question, answer, eval_class, device, round_num, train_log_dir, args, entry)
+        total_loss, train_metrics = grpo_loss(
+            model, base_model, tokenizer, question, answer, 
+            eval_class, device, round_num, train_log_dir, args, entry
+        )
         
         # Gradient accumulation
-        total_loss = total_loss # / args.gradient_accumulation_steps
         total_loss.backward()
         accumulated_loss += total_loss.item()
         scheduler.step()
@@ -955,4 +657,6 @@ if __name__ == "__main__":
             model.save_pretrained(ckpt_path)
             tokenizer.save_pretrained(ckpt_path)
 
-   
+    print("\n" + "="*80)
+    print("Training Complete!")
+    print("="*80)
