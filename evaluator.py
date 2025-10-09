@@ -566,7 +566,14 @@ class thinkGymEvaluator(RewardEvaluator):
     def __init__(self, dataset_name: str):
         self.num_reward_functions = 4
         self.dataset_name = dataset_name
-        self.dataset = reasoning_gym.create_dataset(self.dataset_name, size=10000,seed=42)
+        if self.dataset_name == "mixed":
+            self.tasks = ['color_cube_rotation','prime_factorization','shortest_path','acre','graph_color','family_relationships']
+            datasets = []
+            for task in self.tasks:
+                datasets.append(reasoning_gym.create_dataset(task, size=10000))
+            self.dataset = datasets
+        else:
+            self.dataset = reasoning_gym.create_dataset(self.dataset_name, size=10000,seed=42)
     def _extract_answer(self, text: str) -> str:
         """Extract answer from text."""
         if "<answer>" in text:
@@ -586,7 +593,13 @@ class thinkGymEvaluator(RewardEvaluator):
                 rewards.append(0.0)
                 continue
             if entry is not None:
-                rewards.append(self.dataset.score_answer(answer=r,entry=entry)*2)
+                if self.dataset_name != "mixed":
+                    rewards.append(self.dataset.score_answer(answer=r,entry=entry)*2)
+                else:
+                    dataset_name_from_entry = entry['metadata']['source_dataset']
+                    dataset_from_entry_index = self.tasks.index(dataset_name_from_entry)
+                    dataset_from_entry = self.dataset[dataset_from_entry_index]
+                    rewards.append(dataset_from_entry.score_answer(answer=r,entry=entry)*2)
                 continue
             else:
                 print("No entry provided")
@@ -606,7 +619,7 @@ class thinkGymEvaluator(RewardEvaluator):
         """Reward for word count."""
         responses = [completion[0]["content"] for completion in completions]
         lengths = [len(r.split()) for r in responses]
-        return [0.5 if l > 200 and l < 400 else 0.0 for l in lengths]
+        return [0 if l > 200 and l < 400 else 0.0 for l in lengths]
 
     def _xml_count_reward(self, completions) -> List[float]:
         """Reward for XML tag counting."""

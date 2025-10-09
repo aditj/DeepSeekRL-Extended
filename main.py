@@ -710,17 +710,17 @@ Respond in the following format only:
 ...
 </answer>
 """
-    default_system_prompt =  """You will be given a question that involves reasoning. You should first think about different approaches to solve the question, then reason about those approaches step by step and finally provide your answer.
-    Think in roughly 200-400 words.
-            It is very important that you put your reasoning process inside <think> tags and your final answer inside <answer> tags, like this:
+    default_system_prompt =  """Role: You are a high-functioning reasoning agent.
+    Task: You will be given a question that involves reasoning. You should first think about an approach to solve the question, then reason about those approach step by step and finally provide your answer.
+    Output Format: It is very important that you put your reasoning process inside <think> tags and your final answer inside <answer> tags, like this:
             <think>
             Your step-by-step reasoning process here
             </think>
             <answer>
             Your final answer here
             </answer>
-            All of your returned text should either be in the <think> or <answer> tags - no text outside! Start each answer by immediately starting with <think>. 
-            It is is extremely important you answer in this way - do not put any information or text outside of these tags!"""
+    All of your returned text should either be in the <think> or <answer> tags - no text outside! Start each answer by immediately starting with <think>. 
+    It is is extremely important you answer in this way - do not put any information or text outside of these tags!"""
     # Model configuration
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-1.5B-Instruct", help="Name/path of base model")
     parser.add_argument("--dataset", type=str, default="gsm8k", help="Dataset to use for training (e.g., gsm8k, math500)")

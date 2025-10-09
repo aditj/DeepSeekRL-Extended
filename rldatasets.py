@@ -363,9 +363,10 @@ def build_leetcode_dataloaders() -> Tuple[DataLoader, DataLoader]:
     return trainloader, testloader
 def build_reasoning_gym_dataloaders(dataset_name: str, size: int) -> Tuple[DataLoader, DataLoader]:
     reasoning_task = dataset_name.split(".")[0]
-    
+    difficulty = dataset_name.split(".")[-1]
     if reasoning_task == 'shortest_path':
         data = reasoning_gym.create_dataset(reasoning_task, size=10000,seed=42,p_blocked=0.1,min_rows=3,min_cols=3)
+    
     elif reasoning_task == 'family_relationships':
         data = reasoning_gym.create_dataset(reasoning_task, size=10000,seed=42,min_family_size=8,max_family_size=12)
     elif reasoning_task == 'number_sequence':
@@ -374,9 +375,34 @@ def build_reasoning_gym_dataloaders(dataset_name: str, size: int) -> Tuple[DataL
         data = reasoning_gym.create_dataset(reasoning_task, size=5000,seed=42)
     elif reasoning_task == 'sokoban':
         data = reasoning_gym.create_dataset(reasoning_task, size=1000,seed=42,min_w=3,max_w=5,min_h=3,max_h=5,min_boxes=2,max_boxes=3)
+    elif reasoning_task == 'mixed':
+        tasks = ['color_cube_rotation','prime_factorization','shortest_path','acre','graph_color','family_relationships']
+        datasets = []
+        data = {}
+        n_samples = 2000
+        n_tasks = len(tasks)
+        for task in tasks:
+            datasets.append(reasoning_gym.create_dataset(task, size=n_samples))
+        for i in tqdm(range(n_tasks*n_samples), desc="Processing train data"):
+            data[i] = {}
+            data[i]['question'] = datasets[i//n_samples][i%n_samples]['question']
+            data[i]['answer'] = datasets[i//n_samples][i%n_samples]['answer']
+            data[i]['metadata'] = datasets[i//n_samples][i%n_samples]['metadata']
     else:   
         data = reasoning_gym.create_dataset(reasoning_task, size=10000,seed=42)
-
+    if difficulty == 'hard':
+        if reasoning_task == 'color_cube_rotation':
+            data = reasoning_gym.create_dataset('color_cube_rotation', size=10000,min_rotations=8,max_rotations=20,seed=42)
+        elif reasoning_task == 'graph_color':
+            data = reasoning_gym.create_dataset('graph_color', size=10000,num_colors=4,min_num_vertices=10,max_num_vertices=20,edge_probability = 0.4,seed=42)
+        elif reasoning_task == 'family_relationships':
+            data = reasoning_gym.create_dataset('family_relationships', size=10000,min_family_size=10,max_family_size=20,seed=42)
+        elif reasoning_task == 'number_sequence':
+            data = reasoning_gym.create_dataset('number_sequence', size=10000,max_complexity=4,max_terms=6,min_terms=4,)
+        elif reasoning_task == 'shortest_path':
+            data = reasoning_gym.create_dataset('shortest_path', size=10000,seed=42,p_blocked=0.2,min_rows=3,min_cols=5)
+        else:
+            raise ValueError(f"Hard difficulty not implemented for {reasoning_task}")
     test_size = int(len(data) * 0.01)
     test_indices = random.sample(range(len(data)), test_size)
     train_indices = list(set(range(len(data))) - set(test_indices))
@@ -428,3 +454,5 @@ def get_dataloaders(dataset_name: str) -> Tuple[DataLoader, DataLoader]:
 
 if __name__ == "__main__":
     trainloader, testloader = get_dataloaders('gsm8k')
+
+
