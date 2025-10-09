@@ -23,7 +23,7 @@ def get_llm_tokenizer(model_name: str, device: str, use_flash_attention: bool = 
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
             torch_dtype=torch.bfloat16,
-            attn_implementation="flash_attention_2" if "Qwen" in model_name else "eager",
+            attn_implementation="eager",  # TODO: On g2, we can't use flash_attention_2 right now. attn_implementation="flash_attention_2" if "Qwen" in model_name else "eager",
             device_map="auto", 
         )
     else:
