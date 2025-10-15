@@ -18,6 +18,26 @@ The implementation now includes several major enhancements:
 I hope this might help other people understand things better, and maybe provide an easier way to try out smaller scale ideas etc.
 
 ## Installation
+### Using uv
+Inside the repository, run:
+```bash
+uv sync
+```
+
+Then, we install flash attention separately:
+```bash
+source .venv/bin/activate
+uv pip install flash-attn --no-build-isolation
+```
+
+G2 Specific notes: gpt has prebuilt nvcc that needs to be pointed in the path, so add the following to your bashrc:
+```bash
+export CUDA_VERSION="cuda-12.1"
+export PATH="/usr/local/$CUDA_VERSION/bin:$PATH"
+export LD_LIBRARY_PATH=/usr/local/$CUDA_VERSION/lib64:$LD_LIBRARY_PATH
+```
+
+### Deprecated
 ```
 pip install -r requirements.txt
 ```
