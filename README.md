@@ -24,10 +24,11 @@ Inside the repository, run:
 uv sync
 ```
 
-Then, we install flash attention separately:
+Then, we install flash attention separately (Note: this is only tested on G2)
 ```bash
 source .venv/bin/activate
-uv pip install flash-attn --no-build-isolation
+uv pip install --index-url https://download.pytorch.org/whl/cu121 torch==2.5.1+cu121
+uv pip install flash-attn==2.7.4.post1 --no-build-isolation
 ```
 
 G2 Specific notes: gpt has prebuilt nvcc that needs to be pointed in the path, so add the following to your bashrc:
