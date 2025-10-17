@@ -361,7 +361,58 @@ def build_leetcode_dataloaders() -> Tuple[DataLoader, DataLoader]:
     testloader = MBPPLoader(questions_test, parsed_test_cases_test, function_signatures_test)
     
     return trainloader, testloader
-def build_reasoning_gym_dataloaders(dataset_name: str, size: int) -> Tuple[DataLoader, DataLoader]:
+def build_reasoning_gym_dataloaders(dataset_name: str, predefined_test_size: int = None, **kwargs) -> Tuple[DataLoader, DataLoader]:
+    """
+    Build reasoning gym data loaders for a given dataset name.
+    Args:
+        dataset_name: Name of the dataset to load
+            {reasoning_task}.reasoning_gym
+            {reasoning_task}.reasoning_gym.{difficulty}
+        test_proportion: Proportion of the data to use for testing
+        **kwargs: Additional arguments to pass to the reasoning gym dataset creation function
+    Returns:
+        Tuple[DataLoader, DataLoader]: Train and test data loaders
+    """
+    # Use kwargs to initialize the reasoning gym dataset creation function
+    if dataset_name.count(".") < 1:
+        reasoning_task = dataset_name.split(".")[0]
+        data = reasoning_gym.create_dataset(reasoning_task, **kwargs)
+    # Hard-coded reasoning gym datasets based on difficulty
+    else:
+        data = load_reasoning_gym_data_via_difficulty(dataset_name)
+
+    if predefined_test_size is None:
+        test_size = int(len(data) * 0.01)
+    else:
+        test_size = predefined_test_size
+    test_indices = random.sample(range(len(data)), test_size)
+    train_indices = list(set(range(len(data))) - set(test_indices))
+    questions = []
+    answers = []
+    questions_test = []
+    answers_test = []
+    entries = []
+    entries_test = []
+    for i in tqdm(train_indices, desc="Processing train data"):
+        questions.append(data[i]['question'])
+        answers.append(data[i]['answer'])
+        entries.append(data[i])
+    for i in tqdm(test_indices, desc="Processing test data"):
+        questions_test.append(data[i]['question'])
+        answers_test.append(data[i]['answer'])
+        entries_test.append(data[i])
+    trainloader = ReasoningGymLoader(questions, answers, entries=entries)
+    testloader = ReasoningGymLoader(questions_test, answers_test, entries=entries_test)
+    return trainloader, testloader
+
+def load_reasoning_gym_data_via_difficulty(dataset_name: str):
+    """
+    Load reasoning gym data via difficulty.
+    Args:
+        dataset_name: Name of the dataset to load
+    Returns:
+        Tuple[DataLoader, DataLoader]: Train and test data loaders
+    """
     reasoning_task = dataset_name.split(".")[0]
     difficulty = dataset_name.split(".")[-1]
     if reasoning_task == 'shortest_path':
@@ -403,26 +454,8 @@ def build_reasoning_gym_dataloaders(dataset_name: str, size: int) -> Tuple[DataL
             data = reasoning_gym.create_dataset('shortest_path', size=10000,seed=42,p_blocked=0.2,min_rows=3,min_cols=5)
         else:
             raise ValueError(f"Hard difficulty not implemented for {reasoning_task}")
-    test_size = int(len(data) * 0.01)
-    test_indices = random.sample(range(len(data)), test_size)
-    train_indices = list(set(range(len(data))) - set(test_indices))
-    questions = []
-    answers = []
-    questions_test = []
-    answers_test = []
-    entries = []
-    entries_test = []
-    for i in tqdm(train_indices, desc="Processing train data"):
-        questions.append(data[i]['question'])
-        answers.append(data[i]['answer'])
-        entries.append(data[i])
-    for i in tqdm(test_indices, desc="Processing test data"):
-        questions_test.append(data[i]['question'])
-        answers_test.append(data[i]['answer'])
-        entries_test.append(data[i])
-    trainloader = ReasoningGymLoader(questions, answers, entries=entries)
-    testloader = ReasoningGymLoader(questions_test, answers_test, entries=entries_test)
-    return trainloader, testloader
+    
+    return data
 
 def get_dataloaders(dataset_name: str) -> Tuple[DataLoader, DataLoader]:
     """
@@ -446,7 +479,7 @@ def get_dataloaders(dataset_name: str) -> Tuple[DataLoader, DataLoader]:
     elif dataset_name.lower() == 'math500':
         return build_math500_dataloaders()
     elif "reasoning_gym" in dataset_name.lower():
-        return build_reasoning_gym_dataloaders(dataset_name,dataset_name)
+        return build_reasoning_gym_dataloaders(dataset_name)
     else:
         raise ValueError(f"Dataset {dataset_name} not supported. Currently 'gsm8k' and 'math500' are available.")
 

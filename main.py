@@ -405,7 +405,7 @@ def generate_completions(
     # 1. Prepare prompting
     
     prompt = [
-        {'role': 'system', 'content': args.system_prompt},
+        {'role': 'system', 'content': args.system_prompt.strip()},
         {'role': 'user', 'content': question},
         {'role': 'assistant', 'content': "<think>"},
     ]

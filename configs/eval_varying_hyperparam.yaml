@@ -1,0 +1,52 @@
+num_problem_per_hyperparam: 50
+model_generation_config:
+  normal_generation: 0
+  system_prompt: |
+    Role: You are a high-functioning reasoning agent.
+    Task: You will be given a question that involves reasoning. You should first think about an approach to solve the question, then reason about those approach step by step and finally provide your answer.
+    Output Format: It is very important that you put your reasoning process inside <think> tags and your final answer inside <answer> tags, like this:
+            <think>
+            Your step-by-step reasoning process here
+            </think>
+            <answer>
+            Your final answer here
+            </answer>
+    All of your returned text should either be in the <think> or <answer> tags - no text outside! Start each answer by immediately starting with <think>. 
+    It is is extremely important you answer in this way - do not put any information or text outside of these tags!
+  max_prompt_length: 256
+  max_completion_length: 786
+  mixture_k: 2
+  num_chains: 1
+  temperature: 0.9
+  use_flash_attention: 1
+  experiment_name: "different_tokens_1.5b_reasoning_gym_evaluator"
+  verbose: 0
+datasets:
+  # - name: family_relationships
+  #   params:
+  #     # min_family_size: [4, 10, 2]  # start, end (exclusive), step (paper easy=4, hard=5)
+  #     # max_family_size: [8, 14, 2]  # (paper easy=8, hard=9)
+  #     ### 34 combinations
+  #     min_family_size: [4, 18, 2]  # start, end (exclusive), step (paper easy=4, hard=5)
+  #     max_family_size: [8, 22, 2]  # (paper easy=8, hard=9)
+  # - name: shortest_path
+  #   params:
+  #     ### 36 combinations
+  #     min_rows: [5, 65, 20]   # (paper easy=5, hard=25)
+  #     max_rows: [10, 70, 20]   # (paper easy=10, hard=50)
+  #     min_cols: [5, 65, 20]   # (paper easy=5, hard=25)
+  #     max_cols: [10, 70, 20]   # (paper easy=10, hard=50)
+  # - name: graph_color
+  #   params:
+  #     ### 36 combinations
+  #     min_num_vertices: [10, 25, 5]  # (paper easy=10, hard=10)
+  #     max_num_vertices: [10, 35, 5]  # (paper easy=10, hard=20)
+  #     num_colors: [3, 6, 1] # (paper easy=3, hard=4)
+  - name: number_sequence
+    params:
+      ### 36 combinations
+      min_terms: [4, 7, 1] # (paper easy=4, hard=5)
+      max_terms: [8, 12, 1] # (paper easy=8, hard=10)
+      min_value: [-500, 0, 200] # (paper easy=-100, hard=-500)
+      max_value: [100, 700, 200] # (paper easy=100, hard=500)
+      max_complexity: [3, 4, 1] # (paper easy=3, hard=3)
