@@ -107,7 +107,7 @@ Here are the arguments:
 ```bash
 python eval_varying_hyperparam.py
   -c configs/eval_varying_hyperparam.yaml
-  -m Qwen/Qwen2.5-1.5B-Instruct
+  -m Qwen/Qwen2.5-7B-Instruct
   -o output
 ```
 

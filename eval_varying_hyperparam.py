@@ -104,7 +104,7 @@ def generate_hyperparam_sets(dataset_config: Dict) -> List[Dict]:
 
     print(hyperparam_sets)
     print(f"Total number of hyperparam sets: {len(hyperparam_sets)}")
-    input("Press Enter to continue...")
+    # input("Press Enter to continue...")
     
     return hyperparam_sets
 
@@ -189,7 +189,7 @@ def eval_one_dataset(
             hyperparam_set_path = os.path.join(output_path, f"{'+'.join([f'{k}={v}' for k, v in hyperparam_set.items()])}")
             os.makedirs(hyperparam_set_path, exist_ok=True)
 
-            if not os.path.exists(os.path.join(hyperparam_set_path, "individual_results.yaml")):
+            if not os.path.exists(os.path.join(hyperparam_set_path, "_individual_results.yaml")):
                 _, test_loader = rldatasets.build_reasoning_gym_dataloaders(dataset_name, predefined_test_size=config["num_problem_per_hyperparam"], **hyperparam_set)
 
                 results = []
@@ -239,7 +239,20 @@ def eval_one_dataset(
                             }
                         }
                     }
-                    
+                
+                    # Save individual question file in txt format (similar to main.py)
+                    question_id = len(results)
+                    question_file = os.path.join(hyperparam_set_path, f"{question_id}.md")
+                    with open(question_file, 'w') as f:
+                        f.write(f"# Question id={question_id}\n")
+                        f.write(f"## Question:\n{question}\n\n")
+                        f.write(f"## Response:\n{completions_text[0] if completions_text else ''}\n\n")
+                        f.write(f"## Ground Truth:\n{answer}\n")
+                        f.write("## Metrics:\n")
+                        for metric, value in metrics.items():
+                            f.write(f"- {metric}: {value}\n")
+                        f.write(f"Total Score: {rewards_per_func.sum().item() if rewards_per_func is not None else 0.0}\n")
+
                     results.append(result_entry)
                     
                     # Limit number of problems per hyperparam set
@@ -247,13 +260,13 @@ def eval_one_dataset(
                         break
 
                 # Save individual results as YAML file
-                individual_results_file = os.path.join(hyperparam_set_path, "individual_results.yaml")
+                individual_results_file = os.path.join(hyperparam_set_path, "_individual_results.yaml")
                 with open(individual_results_file, 'w') as f:
                     yaml.dump(results, f, default_flow_style=False, sort_keys=False)
             else:
                 print(f"Individual results already exist for hyperparam set: {hyperparam_set_path}")
-                print(f"Loading individual results from: {os.path.join(hyperparam_set_path, 'individual_results.yaml')}")
-                with open(os.path.join(hyperparam_set_path, 'individual_results.yaml'), 'r') as f:
+                print(f"Loading individual results from: {os.path.join(hyperparam_set_path, '_individual_results.yaml')}")
+                with open(os.path.join(hyperparam_set_path, '_individual_results.yaml'), 'r') as f:
                     results = yaml.load(f, Loader=yaml.FullLoader)
                 
             # Calculate aggregated results for this hyperparameter set
@@ -300,18 +313,20 @@ def eval_one_dataset(
         
         print(f"All aggregated results saved to: {aggregated_results_file}")
     else:
-        print(f"Aggregated results already exist for {dataset_name}, loading from: {aggregated_results_file}")
+        print(f"\033[33mAggregated results already exist for {dataset_name}, loading from: {aggregated_results_file}\033[0m")
         with open(aggregated_results_file, 'r') as f:
             all_aggregated_results = json.load(f)
 
     return all_aggregated_results
 
-def plot_aggregated_results(aggregated_results: Dict, img_save_path: str, html_save_path: str = "_output/reasoning_gym/_consolidated_html/"):
+def plot_aggregated_results(dataset_config: Dict, aggregated_results: Dict, img_save_path: str, html_save_path: str = "_output/reasoning_gym/_consolidated_html/"):
     """ Plot parallel coordinates plot of the aggregated results
     Args:
+        dataset_config: Dict containing dataset configuration including hyperparameter names
         aggregated_results: Dict, each key is the name of the hyperparam set, each value is a dict of the aggregated results
         img_save_path: Directory path where to save individual PNG files for each metric
         html_save_path: Base path where to save individual HTML files for each metric
+        dataset_config: Dict containing dataset configuration including hyperparameter names
     
     Effects:
         - Save individual PNG files for each metric in img_save_path/{metric_name}.png
@@ -352,9 +367,16 @@ def plot_aggregated_results(aggregated_results: Dict, img_save_path: str, html_s
     hyperparam_cols = []
     metric_cols = []
     
+    # Get hyperparameter names from dataset config if available
+    if dataset_config and 'params' in dataset_config:
+        expected_hyperparams = set(dataset_config['params'].keys())
+    else:
+        # Fallback to hardcoded list if config not available
+        expected_hyperparams = {'min_rows', 'max_rows', 'min_cols', 'max_cols', 'min_family_size', 'max_family_size', 
+                               'min_num_vertices', 'max_num_vertices', 'min_edges', 'max_edges'}
+    
     for col in df.columns:
-        if col in ['min_rows', 'max_rows', 'min_cols', 'max_cols', 'min_family_size', 'max_family_size', 
-                   'min_num_vertices', 'max_num_vertices', 'min_edges', 'max_edges']:
+        if col in expected_hyperparams:
             hyperparam_cols.append(col)
         else:
             metric_cols.append(col)
@@ -449,17 +471,8 @@ def plot_aggregated_results(aggregated_results: Dict, img_save_path: str, html_s
         metric_dir = os.path.join(html_save_path, metric)
         os.makedirs(metric_dir, exist_ok=True)
         
-        # Extract dataset name from img_save_path if possible
-        dataset_name = "unknown"
-        if "reasoning_gym" in img_save_path:
-            path_parts = img_save_path.split("/")
-            for part in path_parts:
-                if "_s=" in part:
-                    dataset_name = part.split("_s=")[0]
-                    break
-        
         # Create HTML filename and save
-        html_filename = f"{dataset_name}_{'-'.join(metric.split('/'))}_s={SEED}.html"
+        html_filename = f"{dataset_config['name']}_{'-'.join(metric.split('/'))}_s={SEED}.html"
         html_filepath = os.path.join(metric_dir, html_filename)
         
         # Generate HTML with custom CSS for thicker lines
@@ -503,7 +516,7 @@ def plot_aggregated_results(aggregated_results: Dict, img_save_path: str, html_s
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-c", "--config", type=str, default="configs/eval_varying_hyperparam.yaml", help="Path to the config file. Contain (1) # of questions to eval per settting (2) General model generation config (3) List of datasets to eval on")
-    parser.add_argument("-m", "--model", type=str, default="Qwen/Qwen2.5-1.5B-Instruct", help="Path to the model to evaluate on")
+    parser.add_argument("-m", "--model", type=str, default="Qwen/Qwen2.5-7B-Instruct", help="Path to the model to evaluate on")
     parser.add_argument("-o", "--output_dir", type=str, default="output", help="Directory to save the evaluation results")
     parser.add_argument("-p", "--plot_eval", action="store_true", default=False, help="Whether to plot the evaluation results")
     args = parser.parse_args()
@@ -515,7 +528,28 @@ if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # Load agents to evaluate on
+    print(f"\033[32mLoading model: {args.model}\033[0m")
     model, tokenizer = load_model(args.model, device)
+    model.eval()
+    # Verify model size and basic config
+    try:
+        total_params = model.num_parameters()
+    except Exception:
+        total_params = sum(p.numel() for p in model.parameters())
+    try:
+        mem_bytes = model.get_memory_footprint()
+    except Exception:
+        mem_bytes = None
+    def _fmt_count(n):
+        return f"{n/1e9:.2f}B" if n >= 1e9 else (f"{n/1e6:.2f}M" if n >= 1e6 else (f"{n/1e3:.2f}K" if n >= 1e3 else str(n)))
+    if mem_bytes is not None:
+        print(f"\033[36mModel params: {_fmt_count(total_params)}, memory footprint: {mem_bytes/1024/1024/1024:.2f} GiB\033[0m")
+    else:
+        print(f"\033[36mModel params: {_fmt_count(total_params)}\033[0m")
+    hidden_size = getattr(model.config, "hidden_size", None)
+    num_layers = getattr(model.config, "num_hidden_layers", None)
+    if hidden_size is not None and num_layers is not None:
+        print(f"\033[36mConfig: hidden_size={hidden_size}, num_layers={num_layers}\033[0m")
 
     output_dir = os.path.join(args.output_dir, "reasoning_gym")
 
@@ -544,8 +578,8 @@ if __name__ == "__main__":
         if args.plot_eval:
             # Generate interactive parallel coordinates plot
             img_save_path = os.path.join(output_dir, f"{dataset_name}_s={SEED}", args.model.split("/")[-1])
-            html_save_path = os.path.join(output_dir, "_consolidated_html")
-            plot_aggregated_results(all_aggregated_results, img_save_path, html_save_path)
+            html_save_path = os.path.join(output_dir, "_consolidated_html", args.model.split("/")[-1])
+            plot_aggregated_results(full_dataset_config, all_aggregated_results, img_save_path, html_save_path)
 
 
 

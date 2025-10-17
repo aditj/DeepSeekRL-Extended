@@ -25,7 +25,7 @@ datasets:
   - name: family_relationships
     params:
       ### 34 combinations
-      min_family_size: [4, 8, 2]  # start, end (exclusive), step (paper easy=4, hard=5)
+      min_family_size: [4, 17, 2]  # start, end (exclusive), step (paper easy=4, hard=5)
       max_family_size: [8, 22, 2]  # (paper easy=8, hard=9)
   - name: shortest_path
     params:
@@ -43,10 +43,10 @@ datasets:
   - name: number_sequence
     params:
       ### 36 combinations
-      min_terms: [4,6, 1] # (paper easy=4, hard=5)
-      max_terms: [8,11, 2] # (paper easy=8, hard=10)
-      min_value: [-500, 0, -400] # (paper easy=-100, hard=-500)
-      max_value: [100, 700, 400] # (paper easy=100, hard=500)
+      min_terms: [4, 7, 1] # 4-6 (paper easy=4, hard=5)
+      max_terms: [8, 13, 2] # 8-12 (paper easy=8, hard=10)
+      min_value: [-500, 0, 400] # (paper easy=-100, hard=-500)
+      max_value: [100, 501, 400] # (paper easy=100, hard=500)
       max_complexity: [3, 4, 1] # (paper easy=3, hard=3)
   - name: countdown
     params:
