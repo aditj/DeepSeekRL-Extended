@@ -88,6 +88,28 @@ Utility functions supporting advanced token processing:
 ### token_analysis.py
 Provides detailed analysis of token probability distributions during single inference traces. Analyzes entropy patterns, token consistency, and probability landscapes to understand model behavior during generation.
 
+### eval_varying_hyperparam.py
+Evaluates a openend-source model on a set of datasets with varying hyperparameters, and plots the results.
+
+Usage:
+Edit the config file (e.g., `configs/eval_varying_hyperparam.yaml`) as needed. Then run:
+```bash
+python eval_varying_hyperparam.py
+```
+
+Here are the arguments:
+```bash
+python eval_varying_hyperparam.py
+  -c configs/eval_varying_hyperparam.yaml
+  -m Qwen/Qwen2.5-1.5B-Instruct
+  -o output
+```
+
+If you want to plot the results, add the `-p` flag:
+```bash
+python eval_varying_hyperparam.py -p
+```
+
 ## Token Probability Analysis
 Explore model behavior during inference:
 ```bash

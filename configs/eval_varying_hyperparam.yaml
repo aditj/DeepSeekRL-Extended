@@ -22,31 +22,59 @@ model_generation_config:
   experiment_name: "different_tokens_1.5b_reasoning_gym_evaluator"
   verbose: 0
 datasets:
-  # - name: family_relationships
-  #   params:
-  #     # min_family_size: [4, 10, 2]  # start, end (exclusive), step (paper easy=4, hard=5)
-  #     # max_family_size: [8, 14, 2]  # (paper easy=8, hard=9)
-  #     ### 34 combinations
-  #     min_family_size: [4, 18, 2]  # start, end (exclusive), step (paper easy=4, hard=5)
-  #     max_family_size: [8, 22, 2]  # (paper easy=8, hard=9)
-  # - name: shortest_path
-  #   params:
-  #     ### 36 combinations
-  #     min_rows: [5, 65, 20]   # (paper easy=5, hard=25)
-  #     max_rows: [10, 70, 20]   # (paper easy=10, hard=50)
-  #     min_cols: [5, 65, 20]   # (paper easy=5, hard=25)
-  #     max_cols: [10, 70, 20]   # (paper easy=10, hard=50)
-  # - name: graph_color
-  #   params:
-  #     ### 36 combinations
-  #     min_num_vertices: [10, 25, 5]  # (paper easy=10, hard=10)
-  #     max_num_vertices: [10, 35, 5]  # (paper easy=10, hard=20)
-  #     num_colors: [3, 6, 1] # (paper easy=3, hard=4)
+  - name: family_relationships
+    params:
+      ### 34 combinations
+      min_family_size: [4, 8, 2]  # start, end (exclusive), step (paper easy=4, hard=5)
+      max_family_size: [8, 22, 2]  # (paper easy=8, hard=9)
+  - name: shortest_path
+    params:
+      ### 36 combinations
+      min_rows: [5, 65, 20]   # (paper easy=5, hard=25)
+      max_rows: [10, 70, 20]   # (paper easy=10, hard=50)
+      min_cols: [5, 65, 20]   # (paper easy=5, hard=25)
+      max_cols: [10, 70, 20]   # (paper easy=10, hard=50)
+  - name: graph_color
+    params:
+      ### 36 combinations
+      min_num_vertices: [10, 25, 5]  # (paper easy=10, hard=10)
+      max_num_vertices: [10, 35, 5]  # (paper easy=10, hard=20)
+      num_colors: [3, 6, 1] # (paper easy=3, hard=4)
   - name: number_sequence
     params:
       ### 36 combinations
-      min_terms: [4, 7, 1] # (paper easy=4, hard=5)
-      max_terms: [8, 12, 1] # (paper easy=8, hard=10)
-      min_value: [-500, 0, 200] # (paper easy=-100, hard=-500)
-      max_value: [100, 700, 200] # (paper easy=100, hard=500)
+      min_terms: [4,6, 1] # (paper easy=4, hard=5)
+      max_terms: [8,11, 2] # (paper easy=8, hard=10)
+      min_value: [-500, 0, -400] # (paper easy=-100, hard=-500)
+      max_value: [100, 700, 400] # (paper easy=100, hard=500)
       max_complexity: [3, 4, 1] # (paper easy=3, hard=3)
+  - name: countdown
+    params:
+      min_numbers: [3, 6, 1] # 3-5 # (paper easy=4, hard=3)
+      max_numbers: [6, 11, 1] # 6-10 # (paper easy=6, hard=9)
+      min_target: [100, 101, 1] # 100-101 # (paper easy=100, hard=100)
+      max_target: [999, 1000, 1] # 999-1000 # (paper easy=999, hard=1000)
+      min_value: [1, 2, 1] # (paper easy=1, hard=1)
+      max_value: [100, 101, 1] # (paper easy=100, hard=100)
+  ########################################################
+  ## palindrome generation --> palindrome partitioning (partioning seems like a harder version of generation)
+  - name: palindrome_generation
+    params:
+      ### 27 combinations
+      min_length: [5, 81, 15] # 5-80 (paper easy=3, hard=50) 
+      max_length: [10, 161, 30] # 10-160 (paper easy: 10, hard: 100) 
+  - name: palindrome_partitioning
+    params:
+      ### 48 combinations
+      min_string_len: [5, 16, 5] # 5-15 (paper easy=5, hard=5)
+      max_string_len: [10, 21, 5] # 10-20 (paper easy=15, hard=15)
+      min_substring_palindrome_len: [1, 6, 2] # 1-5 (paper easy=1, hard=1)
+      max_substring_palindrome_len: [5, 10, 2] # 5-9 (paper easy=5, hard=5)
+  - name: letter_jumble # Because it needs to reason about and manipulate the string in the same way
+    params:
+      ### 72 combinations
+      min_word_len: [1, 10, 4] # 1-10 (paper easy=1, hard=5)
+      max_word_len: [30, 65, 17] # 30-64 (what they wrote on paper: easy=64, hard=30. But we assume that the flipped is true)
+      min_words: [3, 21, 17] # 3-20 (paper easy=3 hard=20)
+      min_corruption_level: [0.1, 0.4, 0.2] # 0.1-0.3 (paper easy=0.1 hard=0.3)
+      max_corruption_level: [0.6, 1.0, 0.3] # 0.6-0.9 (what they wrote on paper: easy=0.9, hard=0.6. But we assume that the flipped is true)
