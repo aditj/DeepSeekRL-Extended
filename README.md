@@ -31,6 +31,12 @@ uv pip install --index-url https://download.pytorch.org/whl/cu121 torch==2.5.1+c
 uv pip install flash-attn==2.7.4.post1 --no-build-isolation
 ```
 
+For eval_varying_hyperparam.py, you need to install chrome so that we can render the html as plots as well:
+```bash
+plotly_get_chrome
+kaleido_get_chrome
+```
+
 G2 Specific notes: gpt has prebuilt nvcc that needs to be pointed in the path, so add the following to your bashrc:
 ```bash
 export CUDA_VERSION="cuda-12.1"
