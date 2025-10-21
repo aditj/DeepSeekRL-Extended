@@ -2,12 +2,10 @@
 #SBATCH --job-name=grpo_single_multi_env
 #SBATCH --gres=gpu:h100:3    # Request 1× H100 GPU
 #SBATCH --time=48:00:00       # HH:MM:SS
-#SBATCH --array=0-3        # 9 environments (0-8)
+#SBATCH --array=0-5       # 9 environments (0-8)
 #SBATCH --output=std/%x_%A_%a.out   # Stdout/stderr per-array-task
 
 # Activate environment
-source venv/bin/activate
-cd DeepSeekRL-Extended
 
 # Define the 9 environments to train on
 tasks=(
@@ -23,10 +21,12 @@ tasks=(
     "zebra_puzzles"
 )
 tasks_hard=(
-    "acre.reasoning_gym"
-    "graph_color.reasoning_gym"
-    "number_sequence.reasoning_gym.hard"
-    "zebra_puzzles.reasoning_gym"
+    "family_relationships.reasoning_gym.hard",
+    "shortest_path.reasoning_gym.hard",
+    "graph_color.reasoning_gym.hard",
+    "number_sequence.reasoning_gym.hard",
+    "palindrome_generation.reasoning_gym.hard",
+    "palindrome_partitioning.reasoning_gym.hard",
 )
 
 # Get current task based on array index
@@ -54,9 +54,9 @@ eval_envs_hard=(
 )
 
 # Training parameters
-num_steps=2000
+num_steps=10000
 num_chains=5
-eval_iterations=100
+eval_iterations=0
 max_prompt_length=1024
 max_completion_length=2048
 temperature=0.9
@@ -74,8 +74,8 @@ echo "Experiment: ${experiment_name}"
 echo "GPU: $CUDA_VISIBLE_DEVICES"
 
 # Run training with multi-environment evaluation
-python main_single.py \
-  --output_dir output_single_multi_env/grpo_${experiment_name} \
+uv run scripts/main_single.py \
+  --output_dir ../output_single_multi_env/grpo_${experiment_name} \
   --model_name $model_name \
   --dataset $dataset \
   --eval_environments ${eval_envs_hard[@]} \

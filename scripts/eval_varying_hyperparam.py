@@ -23,7 +23,7 @@ from transformers import PreTrainedModel, PreTrainedTokenizerBase
 import llms
 import evaluator
 import rldatasets
-from main import generate_completions
+from main_single import generate_completions
 
 # Set seed
 SEED = 42

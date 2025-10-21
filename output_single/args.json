@@ -1,0 +1,32 @@
+{
+    "model_name": "Qwen/Qwen2.5-1.5B-Instruct",
+    "dataset": "gsm8k",
+    "evaluator": "gsm8k",
+    "eval_environments": [
+        "family_relationships.reasoning_gym.hard"
+    ],
+    "output_dir": "output_single",
+    "verbose": false,
+    "save_steps": 100,
+    "eval_iterations": 20,
+    "learning_rate": 5e-06,
+    "adam_beta1": 0.9,
+    "adam_beta2": 0.99,
+    "weight_decay": 0.1,
+    "max_grad_norm": 0.1,
+    "gradient_accumulation_steps": 4,
+    "warmup_percent": 0.18,
+    "update_ref_model": false,
+    "update_ref_model_freq": 200,
+    "ref_model_mixup_alpha": 0.1,
+    "temperature": 0.9,
+    "num_chains": 16,
+    "max_prompt_length": 256,
+    "max_completion_length": 786,
+    "num_train_iters": 1000,
+    "kl_weight_beta": 0.1,
+    "seed": 7111994,
+    "use_flash_attention": 1,
+    "system_prompt": "You will be given a question that involves reasoning. You should first think about different approaches to solve the question, then reason about those approaches step by step and finally provide your answer.\n    Think in roughly 200-400 words.\n            It is very important that you put your reasoning process inside <think> tags and your final answer inside <answer> tags, like this:\n            <think>\n            Your step-by-step reasoning process here\n            </think>\n            <answer>\n            Your final answer here\n            </answer>\n            All of your returned text should either be in the <think> or <answer> tags - no text outside! Start each answer by immediately starting with <think>. \n            It is is extremely important you answer in this way - do not put any information or text outside of these tags!",
+    "checkpoint_frequency": 200
+}
