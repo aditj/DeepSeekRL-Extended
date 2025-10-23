@@ -10,7 +10,7 @@ datasets:
       ### 9 combinations
       # Paper's min_family_size: easy=4, hard=5
       # Paper's max_family_size: easy=8, hard=9
-      min_family_size: [4, 21, 2]  # 4 - 20 (x 9)
+      min_family_size: [4, 31, 2]  # 4 - 30 (x 14)
   - name: shortest_path
     params:
       ### 25 combinations
@@ -41,9 +41,9 @@ datasets:
       # Warning: We handle this differently compared to other params
       #   because this specifies the range of value to each term, we set max to be abs(min)
       min_value: [-500, -99, 400] # -500 - 100 (x 2)
-      # Paper didn't mention min_complexity, but code sets it to 1
+      # Paper didn't mention min_complexity
       # Paper's max_complexity: easy=3, hard=3
-      min_complexity: [1, 4, 1] # 1-3 (x 3)
+      max_complexity: [1, 4, 1] # 1-3 (x 3)
   # TODO: We haven't experiemented with countdown yet. Skipping for now.
   # - name: countdown
   #   params:
@@ -57,11 +57,11 @@ datasets:
   ## palindrome generation --> palindrome partitioning (partioning seems like a harder version of generation)
   - name: palindrome_generation
     params:
-      ### 12 combinations
+      ### 11 combinations
       # Paper's min_length: easy=3, hard=50
       # Paper's max_length: easy=10, hard=100
       # Note: We split the length investigation into 3-9 and 10-150 to handle different ranges
-      min_length_part_1: [3, 10, 3] # 3-9 (x 4)
+      min_length_part_1: [3, 10, 3] # 3-9 (x 3)
       min_length_part_2: [10, 151, 20] # 10-150 (x 8)
   - name: palindrome_partitioning
     params:

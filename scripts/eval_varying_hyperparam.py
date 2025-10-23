@@ -69,13 +69,12 @@ def generate_hyperparam_sets(dataset_config: Dict, eval_mode: str) -> List[Dict]
     for param_name, param_config in dataset_config.items():
         if param_name != "name":
             start, end, step = param_config
-            param_ranges[param_name] = list(np.arange(start, end, step))
-    
+            param_ranges[param_name] = np.arange(start, end, step).tolist()
     
     if eval_mode == "train":
         hyperparam_sets = _generate_hyperparam_sets_train(param_ranges, dataset_config["name"])
     elif eval_mode == "test":
-        hyperparam_sets = _generate_hyperparam_sets_test(param_ranges)
+        hyperparam_sets = _generate_hyperparam_sets_test(param_ranges, dataset_config["name"])
     else:
         raise ValueError(f"Invalid eval mode: {eval_mode}")
 
@@ -124,7 +123,7 @@ def _generate_hyperparam_sets_train(param_ranges: Dict, dataset_name: str) -> Li
 
     return hyperparam_sets
 
-def _generate_hyperparam_sets_test(param_ranges: Dict) -> List[Dict]:
+def _generate_hyperparam_sets_test(param_ranges: Dict, dataset_name: str) -> List[Dict]:
     """Generate all combinations of parameters for testing parameter swipe
 
     Note:
@@ -138,6 +137,8 @@ def _generate_hyperparam_sets_test(param_ranges: Dict) -> List[Dict]:
         if param_name.endswith('_part_1'):
             # Find the corresponding _part_2 parameter
             base_name = param_name.replace('_part_1', '')
+
+            # TODO: Optimize this to be able to handle more than 2 parts
             part_2_name = base_name + '_part_2'
             
             if part_2_name in param_ranges:
@@ -173,54 +174,20 @@ def _generate_hyperparam_sets_test(param_ranges: Dict) -> List[Dict]:
         processed_dict = {}
         
         for param_name, param_value in param_dict.items():
+            processed_dict[param_name] = param_value
+            
             if param_name.startswith('min_'):
-                # For min parameters, we need to create both min and max with same value
-                processed_dict[param_name] = param_value
-                
-                # Create corresponding max parameter
                 max_param_name = param_name.replace('min_', 'max_')
-                processed_dict[max_param_name] = param_value
-                
-                # Handle special cases
-                if param_name == 'min_value':
-                    # For min_value, max_value should be abs(min_value)
-                    processed_dict['max_value'] = abs(param_value)
-                elif param_name == 'min_rows':
-                    # For min_rows, also set max_rows
-                    processed_dict['max_rows'] = param_value
-                elif param_name == 'min_cols':
-                    # For min_cols, also set max_cols
-                    processed_dict['max_cols'] = param_value
-                elif param_name == 'min_family_size':
-                    # For min_family_size, also set max_family_size
-                    processed_dict['max_family_size'] = param_value
-                elif param_name == 'min_num_vertices':
-                    # For min_num_vertices, also set max_num_vertices
-                    processed_dict['max_num_vertices'] = param_value
-                elif param_name == 'min_terms':
-                    # For min_terms, also set max_terms
-                    processed_dict['max_terms'] = param_value
-                elif param_name == 'min_complexity':
-                    # For min_complexity, also set max_complexity
-                    processed_dict['max_complexity'] = param_value
-                elif param_name == 'min_string_len':
-                    # For min_string_len, also set max_string_len
-                    processed_dict['max_string_len'] = param_value
-                elif param_name == 'min_word_len':
-                    # For min_word_len, also set max_word_len
-                    processed_dict['max_word_len'] = param_value
-                elif param_name == 'min_words':
-                    # For min_words, also set max_words
-                    processed_dict['max_words'] = param_value
-                elif param_name == 'min_corruption_level':
-                    # For min_corruption_level, also set max_corruption_level
-                    processed_dict['max_corruption_level'] = param_value
-                elif param_name == 'min_length':
-                    # For min_length, also set max_length
-                    processed_dict['max_length'] = param_value
-            else:
-                # Non-min parameters, add as is
-                processed_dict[param_name] = param_value
+
+                if max_param_name not in param_dict:
+                    # max parameter needs to be set to the same value as min parameter
+                    if dataset_name == "number_sequence" and param_name == "min_value":
+                        # Special case for number_sequence
+                        # because this specifies the range of value to each term, we set max to be abs(min)
+                        processed_dict[max_param_name] = abs(param_value)
+                    else:
+                        # For other datasets, we set max to be the same as min
+                        processed_dict[max_param_name] = param_value
         
         hyperparam_sets.append(processed_dict)
     
@@ -323,15 +290,10 @@ def eval_one_dataset(
                         setattr(mock_args, key, value)
                     
                     # Generate completions
-                    if mock_args.normal_generation:
-                        prompt_completion_ids, prompt_ids, completion_ids, attention_mask, completions_text, prompt_text = generate_completions(
-                            model, tokenizer, question, device, mock_args
-                        )
-                        generation_log = None
-                    else:
-                        prompt_completion_ids, prompt_ids, completion_ids, attention_mask, completions_text, prompt_text, generation_log, token_embeddings_list, mixture_selected_tokens = generate_completions(
-                            model, tokenizer, question, device, mock_args
-                        )
+                    # Note: (10/23) normal_generation deprecated in main.py
+                    prompt_completion_ids, prompt_ids, completion_ids, attention_mask, completions_text, prompt_text = generate_completions(
+                        model=model, tokenizer=tokenizer, question=question, device=device, args=mock_args
+                    )
                     
                     # Score completions using evaluator
                     mock_prompts = [[{'content': question}]] * len(completions_text)
@@ -353,13 +315,7 @@ def eval_one_dataset(
                         "response": completions_text[0] if completions_text else "",
                         "ground_truth": answer,
                         "metrics": metrics,
-                        "total_score": rewards_per_func.sum().item() if rewards_per_func is not None else 0.0,
-                        "generation_log": {
-                            "phase_transitions": generation_log.get('phase_transitions', []) if generation_log else [],
-                            "final_sequences": {
-                                "sequence_lengths": generation_log.get('final_sequences', {}).get('sequence_lengths', []) if generation_log else []
-                            }
-                        }
+                        "total_score": rewards_per_func.sum().item() if rewards_per_func is not None else 0.0
                     }
                 
                     # Save individual question file in txt format (similar to main.py)
@@ -700,7 +656,7 @@ if __name__ == "__main__":
             tokenizer=tokenizer,
             dataset_evaluator=dataset_evaluator,
             dataset_config=full_dataset_config,
-            model_generation_config=config["model_generation_config"],
+            model_generation_config=generation_config,
             num_problem_per_hyperparam=config["num_problem_per_hyperparam"],
             output_dir=output_dir,
             device=device
