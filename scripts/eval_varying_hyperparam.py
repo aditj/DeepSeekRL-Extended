@@ -36,7 +36,7 @@ def load_model(model_name: str, device: str):
     model, tokenizer = llms.get_llm_tokenizer(model_name, device)
     return model, tokenizer
 
-def generate_hyperparam_sets(dataset_config: Dict) -> List[Dict]:
+def generate_hyperparam_sets(dataset_config: Dict, eval_mode: str) -> List[Dict]:
     """
     Args:
         dataset_config: Dict, each key is the name of the hyperparam, each value is a list of [start, end, step]
@@ -71,6 +71,26 @@ def generate_hyperparam_sets(dataset_config: Dict) -> List[Dict]:
             start, end, step = param_config
             param_ranges[param_name] = list(np.arange(start, end, step))
     
+    
+    if eval_mode == "train":
+        hyperparam_sets = _generate_hyperparam_sets_train(param_ranges, dataset_config["name"])
+    elif eval_mode == "test":
+        hyperparam_sets = _generate_hyperparam_sets_test(param_ranges)
+    else:
+        raise ValueError(f"Invalid eval mode: {eval_mode}")
+
+    print(hyperparam_sets)
+    print(f"Total number of hyperparam sets: {len(hyperparam_sets)}")
+    # input("Press Enter to continue...")
+    
+    return hyperparam_sets
+
+
+def _generate_hyperparam_sets_train(param_ranges: Dict, dataset_name: str) -> List[Dict]:
+    """Generate all combinations of parameters for training parameter swipe
+
+    Most importantly: For a hyperparameter pair (min, max), min and max can have different values
+    """
     # Generate all combinations of parameters
     param_names = list(param_ranges.keys())
     param_values = list(param_ranges.values())
@@ -102,13 +122,113 @@ def generate_hyperparam_sets(dataset_config: Dict) -> List[Dict]:
         if valid:
             hyperparam_sets.append(param_dict)
 
-    print(hyperparam_sets)
-    print(f"Total number of hyperparam sets: {len(hyperparam_sets)}")
-    # input("Press Enter to continue...")
-    
     return hyperparam_sets
 
+def _generate_hyperparam_sets_test(param_ranges: Dict) -> List[Dict]:
+    """Generate all combinations of parameters for testing parameter swipe
+
+    Note:
+        - Most importantly: min and max MUST have the same value for all hyperparameters
+        - Some hyperparameters have multiple ranges (e.g., min_length_part_1 and min_length_part_2): We will consolidate them into a single range
+    """
+    # First, consolidate parameters with _part_1 and _part_2 suffixes
+    consolidated_ranges = {}
+    
+    for param_name, param_values in param_ranges.items():
+        if param_name.endswith('_part_1'):
+            # Find the corresponding _part_2 parameter
+            base_name = param_name.replace('_part_1', '')
+            part_2_name = base_name + '_part_2'
+            
+            if part_2_name in param_ranges:
+                # Consolidate both ranges into one
+                part_1_values = param_values
+                part_2_values = param_ranges[part_2_name]
+                consolidated_values = part_1_values + part_2_values
+                consolidated_ranges[base_name] = consolidated_values
+            else:
+                # No _part_2 found, use as is
+                consolidated_ranges[param_name] = param_values
+        elif param_name.endswith('_part_2'):
+            # Skip _part_2 parameters as they're handled above
+            continue
+        else:
+            # Regular parameter, use as is
+            consolidated_ranges[param_name] = param_values
+    
+    # Generate all combinations of consolidated parameters
+    param_names = list(consolidated_ranges.keys())
+    param_values = list(consolidated_ranges.values())
+    
+    # Get all combinations using itertools.product
+    all_combinations = list(product(*param_values))
+    
+    # Convert to list of dictionaries
+    hyperparam_sets = []
+    for combination in all_combinations:
+        param_dict = dict(zip(param_names, combination))
+        
+        # For test mode, we need to ensure min and max parameters have the same values
+        # and handle special cases
+        processed_dict = {}
+        
+        for param_name, param_value in param_dict.items():
+            if param_name.startswith('min_'):
+                # For min parameters, we need to create both min and max with same value
+                processed_dict[param_name] = param_value
+                
+                # Create corresponding max parameter
+                max_param_name = param_name.replace('min_', 'max_')
+                processed_dict[max_param_name] = param_value
+                
+                # Handle special cases
+                if param_name == 'min_value':
+                    # For min_value, max_value should be abs(min_value)
+                    processed_dict['max_value'] = abs(param_value)
+                elif param_name == 'min_rows':
+                    # For min_rows, also set max_rows
+                    processed_dict['max_rows'] = param_value
+                elif param_name == 'min_cols':
+                    # For min_cols, also set max_cols
+                    processed_dict['max_cols'] = param_value
+                elif param_name == 'min_family_size':
+                    # For min_family_size, also set max_family_size
+                    processed_dict['max_family_size'] = param_value
+                elif param_name == 'min_num_vertices':
+                    # For min_num_vertices, also set max_num_vertices
+                    processed_dict['max_num_vertices'] = param_value
+                elif param_name == 'min_terms':
+                    # For min_terms, also set max_terms
+                    processed_dict['max_terms'] = param_value
+                elif param_name == 'min_complexity':
+                    # For min_complexity, also set max_complexity
+                    processed_dict['max_complexity'] = param_value
+                elif param_name == 'min_string_len':
+                    # For min_string_len, also set max_string_len
+                    processed_dict['max_string_len'] = param_value
+                elif param_name == 'min_word_len':
+                    # For min_word_len, also set max_word_len
+                    processed_dict['max_word_len'] = param_value
+                elif param_name == 'min_words':
+                    # For min_words, also set max_words
+                    processed_dict['max_words'] = param_value
+                elif param_name == 'min_corruption_level':
+                    # For min_corruption_level, also set max_corruption_level
+                    processed_dict['max_corruption_level'] = param_value
+                elif param_name == 'min_length':
+                    # For min_length, also set max_length
+                    processed_dict['max_length'] = param_value
+            else:
+                # Non-min parameters, add as is
+                processed_dict[param_name] = param_value
+        
+        hyperparam_sets.append(processed_dict)
+    
+    return hyperparam_sets
+    
+
 def eval_one_dataset(
+    eval_mode: str,
     model_name: str,
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizerBase,
@@ -121,6 +241,8 @@ def eval_one_dataset(
 ):
     """
     Args:
+        eval_mode: Mode of hyperparameter evaluation (train or test)
+            Affects how hyperparameters are generated and loaded
         model_name: Name of the model to evaluate
         model: Model to evaluate
         tokenizer: Tokenizer for the model
@@ -175,7 +297,7 @@ def eval_one_dataset(
     os.makedirs(output_path, exist_ok=True)
 
     # Determine the sets of hyperparmeters to eval on
-    hyperparam_sets = generate_hyperparam_sets(dataset_config)
+    hyperparam_sets = generate_hyperparam_sets(dataset_config, eval_mode)
 
     aggregated_results_file = os.path.join(output_path, "_aggregated_results.json")
 
@@ -515,14 +637,22 @@ def plot_aggregated_results(dataset_config: Dict, aggregated_results: Dict, img_
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("-c", "--config", type=str, default="configs/eval_varying_hyperparam.yaml", help="Path to the config file. Contain (1) # of questions to eval per settting (2) General model generation config (3) List of datasets to eval on")
+    parser.add_argument("-c", "--config", type=str, default="configs/eval_varying_train_hyperparam.yaml", help="Path to the config file. Contain (1) # of questions to eval per settting (2) List of datasets to eval on")
+    parser.add_argument("-gc", "--generation_config", type=str, default="configs/eval_generation_config.yaml", help="Path to the generation config file")
     parser.add_argument("-m", "--model", type=str, default="Qwen/Qwen2.5-7B-Instruct", help="Path to the model to evaluate on")
     parser.add_argument("-o", "--output_dir", type=str, default="output", help="Directory to save the evaluation results")
     parser.add_argument("-p", "--plot_eval", action="store_true", default=False, help="Whether to plot the evaluation results")
     args = parser.parse_args()
 
+    # Detect the mode of hyperparameter evaluation
+    mode = "train" if "train" in args.config else "test"
+    print(f"\033[32mRunning {mode} mode\033[0m")
+
     with open(args.config, "r") as f:
         config = yaml.load(f, Loader=yaml.FullLoader)
+
+    with open(args.generation_config, "r") as f:
+        generation_config = yaml.load(f, Loader=yaml.FullLoader)
 
     # Detect the device to use
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -564,6 +694,7 @@ if __name__ == "__main__":
         
         # Evaluate model on this dataset configuration
         all_aggregated_results = eval_one_dataset(
+            eval_mode=mode,
             model_name=args.model,
             model=model, 
             tokenizer=tokenizer,
