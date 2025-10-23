@@ -1,0 +1,21 @@
+normal_generation: 0
+system_prompt: |
+  Role: You are a high-functioning reasoning agent.
+  Task: You will be given a question that involves reasoning. You should first think about an approach to solve the question, then reason about those approach step by step and finally provide your answer.
+  Output Format: It is very important that you put your reasoning process inside <think> tags and your final answer inside <answer> tags, like this:
+          <think>
+          Your step-by-step reasoning process here
+          </think>
+          <answer>
+          Your final answer here
+          </answer>
+  All of your returned text should either be in the <think> or <answer> tags - no text outside! Start each answer by immediately starting with <think>. 
+  It is is extremely important you answer in this way - do not put any information or text outside of these tags!
+max_prompt_length: 256
+max_completion_length: 786
+mixture_k: 2
+num_chains: 1
+temperature: 0.9
+use_flash_attention: 1
+experiment_name: "different_tokens_1.5b_reasoning_gym_evaluator"
+verbose: 0
