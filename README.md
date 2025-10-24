@@ -95,25 +95,78 @@ Utility functions supporting advanced token processing:
 Provides detailed analysis of token probability distributions during single inference traces. Analyzes entropy patterns, token consistency, and probability landscapes to understand model behavior during generation.
 
 ### eval_varying_hyperparam.py
-Evaluates a openend-source model on a set of datasets with varying hyperparameters, and plots the results.
+#### Motivation
+Although reasoning_gym provides a set of hyperparameters for "easy" and "hard" problems, it is unclear whether those training/testing hyperparameters are reasonable for a larger 7B model. 
 
-Usage:
-Edit the config file (e.g., `configs/eval_varying_hyperparam.yaml`) as needed. Then run:
+#### Overview
+Evaluates a open-source model on a set of datasets with varying hyperparameters, and plots the results.
+
+There are two types of varying hyperparameters: train v.s. test
+- If the config file has `train` in the name, we assume that there is a range to sweep for EVERY hyperparameter (i.e., different ranges for min v.s. max)
+- If the config file has `test` in the name, we assume that we are setting MOST of parameters that have min_ and max_ to be the same. Specifically, we only specify the min parameter, and the max parameter is set automatically. 
+More on the config file in a subsection below. 
+
+The general process is: 
+1. Edit the config file (e.g., `configs/eval_train_varying_hyperparam.yaml`) as needed.
+2. Run the script for evaluate the model.
+3. Plot the results (by adding at least the `-p` flag)
+
+#### 1. Edit the config file
+##### Train mode
+
+For training hyperparameter evaluation, see `configs/eval_varying_train_hyperparam.yaml` as an example. 
+
+This config sweeps across ranges for **ALL hyperparameters**, allowing you to find optimal training parameters by testing different combinations of min/max values.
+
+For example, the parameter ranges are specified as a list [start, end, step], where end is exclusive. For example, `min_family_size: [4, 17, 2]` means that we will sweep from 4 to 17 (exclusive) with a step of 2.
+
+##### Test mode
+For testing hyperparameter evaluation, see `configs/eval_varying_test_hyperparam.yaml` as an example. `configs/eval_varying_test_finetuned_model_hyperparam.yaml` is another example for testing a finetuned model on the same datasets, but with a smaller set of hyperparameters.
+
+This config sets min and max values to be the same for most parameters, providing controlled variance for testing specific difficulty levels.
+
+- **Basic**: Specify the range for the min parameter, and the max parameter is set automatically. 
+  - For example, `min_family_size: [4, 17, 2]` means that we will sweep from 4 to 17 (exclusive) with a step of 2. max_family_size is always set to be the same as min_family_size.
+- **Multiple ranges for min**: If you want to specify multiple ranges for the min parameter, you can do so by adding a `_part_1` and `_part_2` suffix to the parameter name. 
+  - For example, `min_family_size_part_1: [4, 17, 2]` and `min_family_size_part_2: [8, 22, 2]` means that the `min_family_size` parameter will be swept from 4 to 17 (exclusive) with a step of 2, and from 8 to 22 (exclusive) with a step of 2.
+- **Specify a max parameter**: If you want to specify a max parameter, you can do so by adding a `max_` prefix to the parameter name. 
+  - For example, `max_family_size: [8, 22, 2]` means that we will sweep from 8 to 22 (exclusive) with a step of 2. The max hyperparameter value ignores `min_family_size`.
+
+
+#### 2. Run the script to evaluate the model
+Here are examples of how to run the script
 ```bash
 python eval_varying_hyperparam.py
+  -c <path_to_config_file>
+  -m <huggingface_model_name> <or local_model_path>
+  -o <output_dir>
 ```
 
-Here are the arguments:
+For example, the script below will evaluate the Qwen-7B model and the model trained on the family_relationships dataset for 10000 steps. The config used is `configs/eval_varying_test_finetuned_model_hyperparam.yaml`.
+```bash
+python scripts/eval_varying_hyperparam.py 
+  -c configs/eval_varying_test_finetuned_model_hyperparam.yaml
+  -m Qwen/Qwen2.5-7B-Instruct models/multi_task_rl_llms-family_relationships/checkpoint_10000
+```
+
+#### 3. Plot the results
+The plots are saved in output_dir/reasoning_gym/_consolidated_line_plots/ and output_dir/reasoning_gym/_consolidated_html/.
 ```bash
 python eval_varying_hyperparam.py
-  -c configs/eval_varying_hyperparam.yaml
-  -m Qwen/Qwen2.5-7B-Instruct
-  -o output
+  -c <path_to_config_file>
+  -m <huggingface_model_name> <or local_model_path>
+  -o <output_dir>
+  -p # Most importantly, add this flag
+  -a # Optionally: Add this flag to make plotting faster. It directly read the _aggregated_results.json, which has results for all the hyperparameter sets.
+  --plot_detailed_sweep # Optionally: Add this flag to plot the detailed sweep of the evaluation results. Used mostly for the train mode.
 ```
 
-If you want to plot the results, add the `-p` flag:
+For example, the script below will plot the results for the Qwen-7B model and the model trained on the family_relationships dataset for 10000 steps. The config used is `configs/eval_varying_test_finetuned_model_hyperparam.yaml`.
 ```bash
-python eval_varying_hyperparam.py -p
+python scripts/eval_varying_hyperparam.py
+  -c configs/eval_varying_test_finetuned_model_hyperparam.yaml
+  -m Qwen/Qwen2.5-7B-Instruct models/multi_task_rl_llms-family_relationships/checkpoint_10000
+  -p -a
 ```
 
 ## Token Probability Analysis

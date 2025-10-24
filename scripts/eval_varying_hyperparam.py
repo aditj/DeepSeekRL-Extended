@@ -12,9 +12,10 @@ import statistics
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import matplotlib.pyplot as plt
 from plotly.subplots import make_subplots
 from tqdm import tqdm
-from typing import Dict, List
+from typing import Dict, List, Callable
 from itertools import product
 from collections import defaultdict
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
@@ -27,10 +28,12 @@ from main_single import generate_completions
 
 # Set seed
 SEED = 42
-np.random.seed(SEED)
-random.seed(SEED)
-torch.manual_seed(SEED)
-torch.cuda.manual_seed_all(SEED)
+
+def set_seed(seed: int):
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
 def validate_model_path(model_path: str) -> bool:
     """
@@ -110,7 +113,7 @@ def generate_hyperparam_sets(dataset_config: Dict, eval_mode: str) -> List[Dict]
     # Extract parameter ranges from config
     param_ranges = {}
     for param_name, param_config in dataset_config.items():
-        if param_name != "name":
+        if param_name != "name" and param_name != "train_range":
             start, end, step = param_config
             param_ranges[param_name] = np.arange(start, end, step).tolist()
     
@@ -151,7 +154,7 @@ def _generate_hyperparam_sets_train(param_ranges: Dict, dataset_name: str) -> Li
             if param_name.startswith('min_'):
                 max_param_name = param_name.replace('min_', 'max_')
                 if max_param_name in param_dict:
-                    if processed_dict[param_name] > processed_dict[max_param_name]:
+                    if param_dict[param_name] > param_dict[max_param_name]:
                         valid = False
                         break
         
@@ -167,29 +170,38 @@ def _generate_hyperparam_sets_test(param_ranges: Dict, dataset_name: str) -> Lis
         - Most importantly: min and max MUST have the same value for all hyperparameters
         - Some hyperparameters have multiple ranges (e.g., min_length_part_1 and min_length_part_2): We will consolidate them into a single range
     """
-    # First, consolidate parameters with _part_1 and _part_2 suffixes
+    # First, consolidate parameters with _part_1, _part_2, ..., _part_10 suffixes
     consolidated_ranges = {}
+    processed_params = set()
     
     for param_name, param_values in param_ranges.items():
-        if param_name.endswith('_part_1'):
-            # Find the corresponding _part_2 parameter
-            base_name = param_name.replace('_part_1', '')
 
-            # TODO: Optimize this to be able to handle more than 2 parts
-            part_2_name = base_name + '_part_2'
             
-            if part_2_name in param_ranges:
-                # Consolidate both ranges into one
-                part_1_values = param_values
-                part_2_values = param_ranges[part_2_name]
-                consolidated_values = part_1_values + part_2_values
-                consolidated_ranges[base_name] = consolidated_values
-            else:
-                # No _part_2 found, use as is
-                consolidated_ranges[param_name] = param_values
-        elif param_name.endswith('_part_2'):
-            # Skip _part_2 parameters as they're handled above
-            continue
+        # Check if this is a multi-part parameter
+        if '_part_' in param_name:
+            # Extract base name and part number
+            parts = param_name.split('_part_')
+            if len(parts) == 2 and parts[1].isdigit() and int(parts[1]) == 1:
+                # Only consolidate the results once (when part_num == 1)
+                base_name = parts[0]
+                part_num = int(parts[1])
+                
+                # Collect all parts for this base parameter
+                all_parts_values = []
+                for i in range(1, 11):  # Support up to 10 parts
+                    part_param_name = f"{base_name}_part_{i}"
+                    if part_param_name in param_ranges:
+                        all_parts_values.extend(param_ranges[part_param_name])
+                        processed_params.add(part_param_name)
+                    else:
+                        break  # No more parts found
+                
+                # Only consolidate if we found multiple parts
+                if len(all_parts_values) > 0:
+                    consolidated_ranges[base_name] = all_parts_values
+                else:
+                    # Single part, use as is
+                    consolidated_ranges[param_name] = param_values
         else:
             # Regular parameter, use as is
             consolidated_ranges[param_name] = param_values
@@ -260,6 +272,8 @@ def eval_one_dataset(
     num_problem_per_hyperparam: int,
     output_dir: str,
     device: str,
+    get_eval_data: bool = False,
+    use_aggregated_results: bool = False,
 ):
     """
     Args:
@@ -323,85 +337,96 @@ def eval_one_dataset(
 
     aggregated_results_file = os.path.join(output_path, "_aggregated_results.json")
 
-    if not os.path.exists(aggregated_results_file):
-    
-        # Initialize aggregated results collection
+    if use_aggregated_results and os.path.exists(aggregated_results_file):
+        print(f"\033[33mLoading aggregated results from: {aggregated_results_file}\033[0m")
+        with open(aggregated_results_file, 'r') as f:
+            all_aggregated_results = json.load(f)
+
+        return all_aggregated_results
+    else:
         all_aggregated_results = {}
 
-        for i in range(len(hyperparam_sets)):
-            hyperparam_set = hyperparam_sets[i]
-            print(hyperparam_set)
-            hyperparam_set_path = os.path.join(output_path, f"{'+'.join([f'{k}={v}' for k, v in hyperparam_set.items()])}")
-            os.makedirs(hyperparam_set_path, exist_ok=True)
+    for i in range(len(hyperparam_sets)):
+        hyperparam_set = hyperparam_sets[i]
+        print(hyperparam_set)
+        hyperparam_set_path = os.path.join(output_path, f"{'+'.join([f'{k}={v}' for k, v in hyperparam_set.items()])}")
+        os.makedirs(hyperparam_set_path, exist_ok=True)
+        individual_results_file = os.path.join(hyperparam_set_path, "_individual_results.yaml")
 
-            if not os.path.exists(os.path.join(hyperparam_set_path, "_individual_results.yaml")):
-                _, test_loader = rldatasets.build_reasoning_gym_dataloaders(dataset_name, predefined_test_size=config["num_problem_per_hyperparam"], **hyperparam_set)
+        if not os.path.exists(individual_results_file):
+            if get_eval_data:
+                raise ValueError(f"{individual_results_file} should exists, but it doesn't")
 
-                results = []
+            set_seed(SEED)
+            _, test_loader = rldatasets.build_reasoning_gym_dataloaders(dataset_name, predefined_test_size=num_problem_per_hyperparam, seed=SEED, **hyperparam_set)
 
-                for question, answer, entry in tqdm(test_loader, desc=f"Eval set {i+1}/{len(hyperparam_sets)}"):
-                    # Create a mock args object with parameters from config file
-                    mock_args = argparse.Namespace()
-                    for key, value in model_generation_config.items():
-                        setattr(mock_args, key, value)
-                    
-                    # Generate completions
-                    # Note: (10/23) normal_generation deprecated in main.py
-                    prompt_completion_ids, prompt_ids, completion_ids, attention_mask, completions_text, prompt_text = generate_completions(
-                        model=model, tokenizer=tokenizer, question=question, device=device, args=mock_args
-                    )
-                    
-                    # Score completions using evaluator
-                    mock_prompts = [[{'content': question}]] * len(completions_text)
-                    mock_completions = [[{'content': completion}] for completion in completions_text]
-                    # Make answer array same length as completions
-                    answers = [answer] * len(completions_text)
-                    rewards_per_func, metrics = dataset_evaluator.compute_rewards(
-                        prompts=mock_prompts,
-                        completions=mock_completions, 
-                        answer=answers,
-                        device=device,
-                        entry=entry
-                    )
-                    
-                    # Create result entry
-                    result_entry = {
-                        "id": len(results),
-                        "question": question,
-                        "response": completions_text[0] if completions_text else "",
-                        "ground_truth": answer,
-                        "metrics": metrics,
-                        "total_score": rewards_per_func.sum().item() if rewards_per_func is not None else 0.0
-                    }
+            results = []
+
+            for question, answer, entry in tqdm(test_loader, desc=f"Eval set {i+1}/{len(hyperparam_sets)}"):
+                # Create a mock args object with parameters from config file
+                mock_args = argparse.Namespace()
+                for key, value in model_generation_config.items():
+                    setattr(mock_args, key, value)
                 
-                    # Save individual question file in txt format (similar to main.py)
-                    question_id = len(results)
-                    question_file = os.path.join(hyperparam_set_path, f"{question_id}.md")
-                    with open(question_file, 'w') as f:
-                        f.write(f"# Question id={question_id}\n")
-                        f.write(f"## Question:\n{question}\n\n")
-                        f.write(f"## Response:\n{completions_text[0] if completions_text else ''}\n\n")
-                        f.write(f"## Ground Truth:\n{answer}\n")
-                        f.write("## Metrics:\n")
-                        for metric, value in metrics.items():
-                            f.write(f"- {metric}: {value}\n")
-                        f.write(f"Total Score: {rewards_per_func.sum().item() if rewards_per_func is not None else 0.0}\n")
+                # Generate completions
+                # Note: (10/23) normal_generation deprecated in main.py
+                prompt_completion_ids, prompt_ids, completion_ids, attention_mask, completions_text, prompt_text = generate_completions(
+                    model=model, tokenizer=tokenizer, question=question, device=device, args=mock_args
+                )
+                
+                # Score completions using evaluator
+                mock_prompts = [[{'content': question}]] * len(completions_text)
+                mock_completions = [[{'content': completion}] for completion in completions_text]
+                # Make answer array same length as completions
+                answers = [answer] * len(completions_text)
+                rewards_per_func, metrics = dataset_evaluator.compute_rewards(
+                    prompts=mock_prompts,
+                    completions=mock_completions, 
+                    answer=answers,
+                    device=device,
+                    entry=entry
+                )
+                
+                # Create result entry
+                result_entry = {
+                    "id": len(results),
+                    "question": question,
+                    "response": completions_text[0] if completions_text else "",
+                    "ground_truth": answer,
+                    "metrics": metrics,
+                    "total_score": rewards_per_func.sum().item() if rewards_per_func is not None else 0.0
+                }
+            
+                # Save individual question file in txt format (similar to main.py)
+                question_id = len(results)
+                question_file = os.path.join(hyperparam_set_path, f"{question_id}.md")
+                with open(question_file, 'w') as f:
+                    f.write(f"# Question id={question_id}\n")
+                    f.write(f"## Question:\n{question}\n\n")
+                    f.write(f"## Response:\n{completions_text[0] if completions_text else ''}\n\n")
+                    f.write(f"## Ground Truth:\n{answer}\n")
+                    f.write("## Metrics:\n")
+                    for metric, value in metrics.items():
+                        f.write(f"- {metric}: {value}\n")
+                    f.write(f"Total Score: {rewards_per_func.sum().item() if rewards_per_func is not None else 0.0}\n")
 
-                    results.append(result_entry)
-                    
-                    # Limit number of problems per hyperparam set
-                    if len(results) >= num_problem_per_hyperparam:
-                        break
+                results.append(result_entry)
+                
+                # Limit number of problems per hyperparam set
+                if len(results) >= num_problem_per_hyperparam:
+                    break
 
-                # Save individual results as YAML file
-                individual_results_file = os.path.join(hyperparam_set_path, "_individual_results.yaml")
-                with open(individual_results_file, 'w') as f:
-                    yaml.dump(results, f, default_flow_style=False, sort_keys=False)
-            else:
-                print(f"Individual results already exist for hyperparam set: {hyperparam_set_path}")
-                print(f"Loading individual results from: {os.path.join(hyperparam_set_path, '_individual_results.yaml')}")
-                with open(os.path.join(hyperparam_set_path, '_individual_results.yaml'), 'r') as f:
-                    results = yaml.load(f, Loader=yaml.FullLoader)
+            # Save individual results as YAML file
+            individual_results_file = os.path.join(hyperparam_set_path, "_individual_results.yaml")
+            with open(individual_results_file, 'w') as f:
+                yaml.dump(results, f, default_flow_style=False, sort_keys=False)
+        else:
+            print(f"Loading individual results from: {individual_results_file}")
+            with open(individual_results_file, 'r') as f:
+                results = yaml.load(f, Loader=yaml.FullLoader)
+
+            # Filter the results to only include the first num_problem_per_hyperparam results
+            results = results[:num_problem_per_hyperparam]
                 
             # Calculate aggregated results for this hyperparameter set
             hyperparam_key = '+'.join([f'{k}={v}' for k, v in hyperparam_set.items()])
@@ -446,14 +471,10 @@ def eval_one_dataset(
             json.dump(all_aggregated_results, f, indent=4)
         
         print(f"All aggregated results saved to: {aggregated_results_file}")
-    else:
-        print(f"\033[33mAggregated results already exist for {dataset_name}, loading from: {aggregated_results_file}\033[0m")
-        with open(aggregated_results_file, 'r') as f:
-            all_aggregated_results = json.load(f)
 
     return all_aggregated_results
 
-def plot_aggregated_results(dataset_config: Dict, aggregated_results: Dict, img_save_path: str, html_save_path: str = "_output/reasoning_gym/_consolidated_html/"):
+def plot_detailed_sweep_results(dataset_config: Dict, aggregated_results: Dict, img_save_path: str, html_save_path: str = "_output/reasoning_gym/_consolidated_html/"):
     """ Plot parallel coordinates plot of the aggregated results
     Args:
         dataset_config: Dict containing dataset configuration including hyperparameter names
@@ -645,7 +666,290 @@ def plot_aggregated_results(dataset_config: Dict, aggregated_results: Dict, img_
         png_filepath = os.path.join(img_save_path, png_filename)
         fig_metric.write_image(png_filepath, width=1200, height=600)
         print(f"PNG plot for {metric} saved to: {png_filepath}")
+
+def get_model_name_to_plot(model_name_to_results: Dict) -> Dict:
+    """
+    Get the model name to plot for the results. We only keep track of the high-level model names.
+    """
+    model_names_to_plot = {}
+    for model_name in model_name_to_results.keys():
+        if "-checkpoint" in model_name:
+            relevant_model_name = model_name.split("-checkpoint")[0]
+        elif "Qwen" in model_name:
+            relevant_model_name = "Qwen"
+        else:
+            relevant_model_name = model_name
+        if relevant_model_name not in model_names_to_plot:
+            model_names_to_plot[relevant_model_name] = 1
+        else:
+            model_names_to_plot[relevant_model_name] += 1
     
+    return "-".join([f"{model_name}={count}" for model_name, count in sorted(model_names_to_plot.items())])
+
+def get_metric_sorting_function(dataset_name: str) -> Callable:
+    """
+    Get the sorting function for a dataset based on its primary hyperparameter.
+    Returns None if no sorting function is defined for the dataset.
+
+    The function takes the hyperparameter values, returns the value to sort by (a number) and the value to display in the plot (a string).
+    """
+    if dataset_name == "family_relationships":
+        # Sort by min_family_size
+        return lambda x: (x["min_family_size"], str(x["min_family_size"])), "Family Size"
+    elif dataset_name == "shortest_path":
+        # Sort by the area of the grid (min_rows * min_cols)
+        return lambda x: (x["min_rows"] * x["min_cols"], f"r={x["min_rows"]}_c={x["min_cols"]}"), "Rows by Columns"
+    elif dataset_name == "graph_color":
+        # Sort by 2 * min_num_vertices + num_colors
+        #   Assume that min_num_vertices make the problem harder, so we give it more weight
+        return lambda x: (2 * x["min_num_vertices"] + x["num_colors"], f"v={x["min_num_vertices"]}_c={x["num_colors"]}"), "# Vertices by # Colors"
+    elif dataset_name == "number_sequence":
+        # Sort by 10 * number of terms + value / 100 + max_complexity
+        #   Assume that number of terms makes the problem harder, so we give it more weight
+        #   min_value is in the 100s so we rescale it
+        return lambda x: (10 * x["min_terms"] + abs(x["min_value"]) / 100 + x["max_complexity"], f"t={x["min_terms"]}_v={x["min_value"]}_c={x["max_complexity"]}"), "# Terms by Term Value by Complexity"
+    elif dataset_name == "palindrome_generation":
+        # Sort by min_string_len
+        return lambda x: (x["min_length"], str(x["min_length"])),"String Length"
+    elif dataset_name == "palindrome_partitioning":
+        # Sort by 10 * min_string_len + (max_substring_palindrome_len - min_substring_palindrome_len)
+        #   Assume that min_string_len makes the problem harder, so we give it more weight
+        #   The range of substring_palindrome_len is secondary factor
+        return lambda x: (10 * x["min_string_len"] + (x["max_substring_palindrome_len"] - x["min_substring_palindrome_len"]), f"len={x["min_string_len"]}_substr_l=[{x["min_substring_palindrome_len"]},{x["max_substring_palindrome_len"]}]"), "String Length by Substring Palindrome Length"
+    else:
+        # No sorting function defined for this dataset
+        return None, None
+
+def plot_aggregated_line_plot(dataset_name: str, model_name_to_results: Dict, img_save_folder: str, train_range: str = ""):
+    """
+    Args:
+        dataset_name: Name of the dataset
+        model_name_to_results: Dict, each key is the name of the model, each value is a dict of the aggregated results
+        img_save_folder: Directory path where to save the aggregated line plot
+        train_range: Dict containing the training range parameters to display below the title
+    """
+    # Get the metric sorting function for the dataset
+    metric_sorting_function, metric_sorting_label = get_metric_sorting_function(dataset_name)
+    
+    if metric_sorting_function is None:
+        print(f"No sorting function defined for dataset: {dataset_name}")
+        return
+
+    # Parse hyperparameter keys and organize data by metrics
+    metric_to_model_data = defaultdict(lambda: defaultdict(list))  # metric_name -> model_name -> [(sort_value, display_value, y_value, error)]
+
+    model_name_to_plot = get_model_name_to_plot(model_name_to_results)
+
+    for model_name, aggregated_results in model_name_to_results.items():
+        for hyperparam_key, hyperparam_value in aggregated_results.items():
+            # Parse hyperparameters from key (format: "param1=value1+param2=value2+...")
+            hyperparams = {}
+            for param_pair in hyperparam_key.split('+'):
+                if '=' in param_pair:
+                    param_name, param_value = param_pair.split('=', 1)
+                    try:
+                        # Try to convert to float, fallback to string
+                        hyperparams[param_name] = float(param_value) if '.' in param_value else int(param_value)
+                    except ValueError:
+                        hyperparams[param_name] = param_value
+            
+            # Get the sorting value and display value for this hyperparameter set
+            try:
+                sort_value, display_value = metric_sorting_function(hyperparams)
+            except KeyError as e:
+                print(f"Warning: Missing hyperparameter for sorting: {e}")
+                continue
+            
+            # Extract metrics for this hyperparameter set
+            for metric_name, metric_data in hyperparam_value.items():
+                if isinstance(metric_data, dict) and 'average' in metric_data and 'standard_error' in metric_data:
+                    y_value = metric_data['average']
+                    error_value = metric_data['standard_error']
+                    metric_to_model_data[metric_name][model_name].append((sort_value, display_value, y_value, error_value))
+    
+    # Create output directory
+    for metric_name in metric_to_model_data.keys():
+        os.makedirs(os.path.join(img_save_folder, metric_name), exist_ok=True)
+    
+    # Create line plots for each metric using matplotlib
+    for metric_name, model_data in metric_to_model_data.items():
+        if not model_data:
+            continue
+            
+        # Create figure
+        plt.figure(figsize=(10, 6))
+        
+        # Define colors for different models
+        colors = plt.cm.tab10(np.linspace(0, 1, len(model_data)))
+        
+        # Plot lines for each model
+        for i, (model_name, data_points) in enumerate(model_data.items()):
+            if not data_points:
+                continue
+                
+            # Sort data points by sort_value (first element)
+            data_points.sort(key=lambda x: x[0])
+            sort_values = [point[0] for point in data_points]
+            display_values = [point[1] for point in data_points]
+            y_values = [point[2] for point in data_points]
+            error_values = [point[3] for point in data_points]
+            
+            # Calculate upper and lower bounds for shaded region
+            y_upper = [y + err for y, err in zip(y_values, error_values)]
+            y_lower = [y - err for y, err in zip(y_values, error_values)]
+            
+            # Plot the main line using display values for x-axis
+            plt.plot(
+                display_values, y_values,
+                label=model_name, color=colors[i],
+                linewidth=2, marker='o', markersize=6
+            )
+            
+            # Add shaded region for error bounds using display values
+            plt.fill_between(
+                display_values, y_lower, y_upper,
+                color=colors[i], alpha=0.2
+            )
+        
+        # Customize plot
+        plt.title(f"{dataset_name}: {metric_name} vs {metric_sorting_label}", fontsize=14, fontweight='bold', pad=20)
+        
+        # Add training range information below the title if available
+        if train_range:
+            # Position the text below the title using axes coordinates
+            ax = plt.gca()
+            ax.text(0.5, 1.15, f"Training Range: {train_range}", ha='center', va='bottom', 
+                   fontsize=10, style='italic', transform=ax.transAxes)
+        
+        plt.xlabel(metric_sorting_label, fontsize=12)
+        plt.ylabel(metric_name, fontsize=12)
+        plt.xticks(rotation=45, ha='right')  # Rotate x-axis labels 45 degrees
+        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        
+        # Add extra top margin to create more space between title and plot
+        plt.subplots_adjust(top=0.85)
+        
+        # Save plot
+        safe_metric_name = metric_name.replace('/', '_').replace(' ', '_')
+        plot_filename = f"{model_name_to_plot}_{dataset_name}_{safe_metric_name}_line_plot.png"
+        plot_path = os.path.join(img_save_folder, metric_name, plot_filename)
+        plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+        print(f"Line plot for {metric_name} saved to: {plot_path}")
+        
+        # Clear the figure to avoid overlapping plots
+        plt.close()
+
+    
+def eval_sweep(models, config, generation_config, output_dir, device, get_eval_data, use_aggregated_results):
+    """
+    Args:
+        models: List of model names to evaluate
+        config: Configuration for the evaluation
+        generation_config: Configuration for the model generation
+        output_dir: Directory to save the evaluation results
+        device: Device to run evaluation on
+        plot_eval: Whether to plot the evaluation results
+    """
+    aggreated_results_dict = {dataset_config["name"]: {get_model_name_to_save(model_name): {} for model_name in models} for dataset_config in config["datasets"]}  # dataset_name -> model_name -> aggregated_results
+
+    for model_name in models:
+        print(f"\033[32mLoading model: {model_name}\033[0m")
+        model_name_to_save = get_model_name_to_save(model_name)
+        print(f"\033[32mModel name to save: {model_name_to_save}\033[0m")
+
+        if get_eval_data:
+            # Assume that we are just getting the evaluation data, so we don't need to load the model (for speed)
+            model = None
+            tokenizer = None
+        else:
+            model, tokenizer = load_model(model_name, device)
+            model.eval()
+            
+            # Verify model size and basic config
+            try:
+                total_params = model.num_parameters()
+            except Exception:
+                total_params = sum(p.numel() for p in model.parameters())
+            try:
+                mem_bytes = model.get_memory_footprint()
+            except Exception:
+                mem_bytes = None
+            def _fmt_count(n):
+                return f"{n/1e9:.2f}B" if n >= 1e9 else (f"{n/1e6:.2f}M" if n >= 1e6 else (f"{n/1e3:.2f}K" if n >= 1e3 else str(n)))
+            if mem_bytes is not None:
+                print(f"\033[36mModel params: {_fmt_count(total_params)}, memory footprint: {mem_bytes/1024/1024/1024:.2f} GiB\033[0m")
+            else:
+                print(f"\033[36mModel params: {_fmt_count(total_params)}\033[0m")
+            hidden_size = getattr(model.config, "hidden_size", None)
+            num_layers = getattr(model.config, "num_hidden_layers", None)
+            if hidden_size is not None and num_layers is not None:
+                print(f"\033[36mConfig: hidden_size={hidden_size}, num_layers={num_layers}\033[0m")
+
+        for dataset_config in config["datasets"]:
+            # Load evaluator
+            if get_eval_data:
+                dataset_evaluator = None
+            else:
+                dataset_evaluator = evaluator.get_evaluator(f"{dataset_config['name']}.reasoning_gym")  # Need to add .reasoning_gym to be compatible with the evaluator
+
+            # Extract the dataset name and merge params into the config
+            dataset_name = dataset_config["name"]
+            dataset_params = dataset_config.get("params", {})
+            full_dataset_config = {"name": dataset_name, **dataset_params}
+            
+            # Evaluate model on this dataset configuration
+            aggregated_results = eval_one_dataset(
+                eval_mode=mode,
+                model_name_to_save=model_name_to_save,
+                model=model, 
+                tokenizer=tokenizer,
+                dataset_evaluator=dataset_evaluator,
+                dataset_config=full_dataset_config,
+                model_generation_config=generation_config,
+                num_problem_per_hyperparam=config["num_problem_per_hyperparam"],
+                output_dir=output_dir,
+                device=device,
+                get_eval_data=get_eval_data,
+                use_aggregated_results=use_aggregated_results
+            )
+            aggreated_results_dict[dataset_name][model_name_to_save] = aggregated_results
+
+    return aggreated_results_dict
+
+
+def plot_sweep(aggregated_results_dict, output_dir, plot_detailed_sweep, config):
+    """
+    Args:
+        aggregated_results_dict: Dict, each key is the name of the dataset, each value is a dict of the aggregated results
+        output_dir: Directory to save the evaluation results
+        plot_detailed_sweep: Whether to plot the detailed sweep of the evaluation results
+        config: Configuration dict containing dataset configs with training ranges
+    """
+    for dataset_name, model_name_to_results in aggregated_results_dict.items():
+        # Extract training range from config if available
+        train_range = None
+        for dataset_config in config["datasets"]:
+            if dataset_config.get("name") == dataset_name and "train_range" in dataset_config:
+                train_range_dict = dataset_config["train_range"]
+                for param_name, param_value in train_range_dict.items():
+                    train_range = "+".join([f"{param_name}={param_value}" for param_name, param_value in train_range_dict.items()])
+                break  # Stop after finding the first matching dataset config
+        
+        plot_aggregated_line_plot(dataset_name, model_name_to_results, img_save_folder=os.path.join(output_dir, "_consolidated_line_plots", f"{dataset_name}_s={SEED}"), train_range=train_range)
+   
+    if plot_detailed_sweep:
+        for dataset_name, model_name_to_results in aggregated_results_dict.items():
+            for model_name_to_save, aggregated_results in model_name_to_results.items():
+                # Generate interactive parallel coordinates plot
+                img_save_path = os.path.join(output_dir, f"{dataset_name}_s={SEED}", model_name_to_save)
+                html_save_path = os.path.join(output_dir, "_consolidated_html", model_name_to_save)
+                
+                # Create a minimal dataset config for the plotting function
+                dataset_config = {"name": dataset_name}
+                plot_detailed_sweep_results(dataset_config, aggregated_results, img_save_path, html_save_path)
+
 def get_model_name_to_save(model_name: str) -> str:
     """
     Get the model name to save the results to
@@ -663,8 +967,12 @@ if __name__ == "__main__":
     parser.add_argument("-gc", "--generation_config", type=str, default="configs/eval_generation_config.yaml", help="Path to the generation config file")
     parser.add_argument("-m", "--models", nargs="+", default=["Qwen/Qwen2.5-7B-Instruct"], help="List of model paths to evaluate on. Can be HuggingFace model names (e.g., 'Qwen/Qwen2.5-7B-Instruct') or local paths to downloaded models (e.g., 'models/multi_task_rl_llms-family_relationships/multi_task_rl_llms-family_relationships/checkpoint_1000')")
     parser.add_argument("-o", "--output_dir", type=str, default="output", help="Directory to save the evaluation results")
+    parser.add_argument("-a", "--use_aggregated_results", action="store_true", default=False, help="Whether to use the aggregated results instead of loading individual results's yaml and/or re-evaluating the model")
     parser.add_argument("-p", "--plot_eval", action="store_true", default=False, help="Whether to plot the evaluation results")
+    parser.add_argument("--plot_detailed_sweep", action="store_true", default=False, help="Whether to plot the detailed sweep of the evaluation results")
     args = parser.parse_args()
+
+    set_seed(SEED)
 
     # Detect the mode of hyperparameter evaluation
     mode = "train" if "train" in args.config else "test"
@@ -681,67 +989,7 @@ if __name__ == "__main__":
 
     output_dir = os.path.join(args.output_dir, "reasoning_gym")
 
-    # Iterate over all models
-    print(f"\033[33mModels to evaluate: {args.models}\033[0m")
+    aggregated_results_dict = eval_sweep(args.models, config, generation_config, output_dir, device, args.plot_eval, args.use_aggregated_results)
 
-    for model_name in args.models:
-        print(f"\033[32mLoading model: {model_name}\033[0m")
-        model_name_to_save = get_model_name_to_save(model_name)
-        print(f"\033[32mModel name to save: {model_name_to_save}\033[0m")
-
-        model, tokenizer = load_model(model_name, device)
-        model.eval()
-        
-        # Verify model size and basic config
-        try:
-            total_params = model.num_parameters()
-        except Exception:
-            total_params = sum(p.numel() for p in model.parameters())
-        try:
-            mem_bytes = model.get_memory_footprint()
-        except Exception:
-            mem_bytes = None
-        def _fmt_count(n):
-            return f"{n/1e9:.2f}B" if n >= 1e9 else (f"{n/1e6:.2f}M" if n >= 1e6 else (f"{n/1e3:.2f}K" if n >= 1e3 else str(n)))
-        if mem_bytes is not None:
-            print(f"\033[36mModel params: {_fmt_count(total_params)}, memory footprint: {mem_bytes/1024/1024/1024:.2f} GiB\033[0m")
-        else:
-            print(f"\033[36mModel params: {_fmt_count(total_params)}\033[0m")
-        hidden_size = getattr(model.config, "hidden_size", None)
-        num_layers = getattr(model.config, "num_hidden_layers", None)
-        if hidden_size is not None and num_layers is not None:
-            print(f"\033[36mConfig: hidden_size={hidden_size}, num_layers={num_layers}\033[0m")
-
-        for dataset_config in config["datasets"]:
-            # Load evaluator
-            dataset_evaluator = evaluator.get_evaluator(f"{dataset_config['name']}.reasoning_gym")  # Need to add .reasoning_gym to be compatible with the evaluator
-
-            # Extract the dataset name and merge params into the config
-            dataset_name = dataset_config["name"]
-            dataset_params = dataset_config.get("params", {})
-            full_dataset_config = {"name": dataset_name, **dataset_params}
-            
-            # Evaluate model on this dataset configuration
-            all_aggregated_results = eval_one_dataset(
-                eval_mode=mode,
-                model_name_to_save=model_name_to_save,
-                model=model, 
-                tokenizer=tokenizer,
-                dataset_evaluator=dataset_evaluator,
-                dataset_config=full_dataset_config,
-                model_generation_config=generation_config,
-                num_problem_per_hyperparam=config["num_problem_per_hyperparam"],
-                output_dir=output_dir,
-                device=device
-            )
-            
-            if args.plot_eval:
-                # Generate interactive parallel coordinates plot
-                img_save_path = os.path.join(output_dir, f"{dataset_name}_s={SEED}", model_name_to_save)
-                html_save_path = os.path.join(output_dir, "_consolidated_html", model_name_to_save)
-                plot_aggregated_results(full_dataset_config, all_aggregated_results, img_save_path, html_save_path)
-
-
-
-    
-
+    if args.plot_eval:
+        plot_sweep(aggregated_results_dict, output_dir, args.plot_detailed_sweep, config)

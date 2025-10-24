@@ -361,7 +361,7 @@ def build_leetcode_dataloaders() -> Tuple[DataLoader, DataLoader]:
     testloader = MBPPLoader(questions_test, parsed_test_cases_test, function_signatures_test)
     
     return trainloader, testloader
-def build_reasoning_gym_dataloaders(dataset_name: str, predefined_test_size: int = None, **kwargs) -> Tuple[DataLoader, DataLoader]:
+def build_reasoning_gym_dataloaders(dataset_name: str, predefined_test_size: int = None, seed: int = 42, **kwargs) -> Tuple[DataLoader, DataLoader]:
     """
     Build reasoning gym data loaders for a given dataset name.
     Args:
@@ -376,10 +376,10 @@ def build_reasoning_gym_dataloaders(dataset_name: str, predefined_test_size: int
     # Use kwargs to initialize the reasoning gym dataset creation function
     if dataset_name.count(".") < 1:
         reasoning_task = dataset_name.split(".")[0]
-        data = reasoning_gym.create_dataset(reasoning_task, **kwargs)
+        data = reasoning_gym.create_dataset(reasoning_task, seed=seed, **kwargs)
     # Hard-coded reasoning gym datasets based on difficulty
     else:
-        data = load_reasoning_gym_data_via_difficulty(dataset_name)
+        data = load_reasoning_gym_data_via_difficulty(dataset_name, seed=seed)
 
     if predefined_test_size is None:
         test_size = int(len(data) * 0.01)
@@ -405,7 +405,7 @@ def build_reasoning_gym_dataloaders(dataset_name: str, predefined_test_size: int
     testloader = ReasoningGymLoader(questions_test, answers_test, entries=entries_test)
     return trainloader, testloader
 
-def load_reasoning_gym_data_via_difficulty(dataset_name: str):
+def load_reasoning_gym_data_via_difficulty(dataset_name: str, seed: int = 42):
     """
     Load reasoning gym data via difficulty.
     Args:
@@ -416,16 +416,16 @@ def load_reasoning_gym_data_via_difficulty(dataset_name: str):
     reasoning_task = dataset_name.split(".")[0]
     difficulty = dataset_name.split(".")[-1]
     if reasoning_task == 'shortest_path':
-        data = reasoning_gym.create_dataset(reasoning_task, size=10000,seed=42,p_blocked=0.1,min_rows=3,min_cols=3,max_rows=8,max_cols=8)
+        data = reasoning_gym.create_dataset(reasoning_task, size=10000,seed=seed,p_blocked=0.1,min_rows=3,min_cols=3,max_rows=8,max_cols=8)
     
     elif reasoning_task == 'family_relationships':
-        data = reasoning_gym.create_dataset(reasoning_task, size=10000,seed=42,min_family_size=8,max_family_size=12)
+        data = reasoning_gym.create_dataset(reasoning_task, size=10000,seed=seed,min_family_size=8,max_family_size=12)
     elif reasoning_task == 'number_sequence':
-        data = reasoning_gym.create_dataset('number_sequence', size=10000,max_complexity=4,max_terms=6,min_terms=4,)
+        data = reasoning_gym.create_dataset('number_sequence', size=10000,seed=seed,max_complexity=4,max_terms=6,min_terms=4,)
     elif reasoning_task == 'maze':
-        data = reasoning_gym.create_dataset(reasoning_task, size=5000,seed=42)
+        data = reasoning_gym.create_dataset(reasoning_task, size=5000,seed=seed)
     elif reasoning_task == 'sokoban':
-        data = reasoning_gym.create_dataset(reasoning_task, size=1000,seed=42,min_w=3,max_w=5,min_h=3,max_h=5,min_boxes=2,max_boxes=3)
+        data = reasoning_gym.create_dataset(reasoning_task, size=1000,seed=seed,min_w=3,max_w=5,min_h=3,max_h=5,min_boxes=2,max_boxes=3)
     elif reasoning_task == 'mixed':
         tasks = ['color_cube_rotation','prime_factorization','shortest_path','acre','graph_color','family_relationships']
         datasets = []
@@ -433,29 +433,29 @@ def load_reasoning_gym_data_via_difficulty(dataset_name: str):
         n_samples = 2000
         n_tasks = len(tasks)
         for task in tasks:
-            datasets.append(reasoning_gym.create_dataset(task, size=n_samples))
+            datasets.append(reasoning_gym.create_dataset(task, size=n_samples, seed=seed))
         for i in tqdm(range(n_tasks*n_samples), desc="Processing train data"):
             data[i] = {}
             data[i]['question'] = datasets[i//n_samples][i%n_samples]['question']
             data[i]['answer'] = datasets[i//n_samples][i%n_samples]['answer']
             data[i]['metadata'] = datasets[i//n_samples][i%n_samples]['metadata']
     else:   
-        data = reasoning_gym.create_dataset(reasoning_task, size=10000,seed=42)
+        data = reasoning_gym.create_dataset(reasoning_task, size=10000,seed=seed)
     if difficulty == 'hard':
         if reasoning_task == 'color_cube_rotation':
-            data = reasoning_gym.create_dataset('color_cube_rotation', size=10000,min_rotations=8,max_rotations=20,seed=42)
+            data = reasoning_gym.create_dataset('color_cube_rotation', size=10000,min_rotations=8,max_rotations=20,seed=seed)
         elif reasoning_task == 'palindrome_generation':
-            data = reasoning_gym.create_dataset('palindrome_generation', size=10000,min_length=5,max_length=10,seed=42)
+            data = reasoning_gym.create_dataset('palindrome_generation', size=10000,min_length=5,max_length=10,seed=seed)
         elif reasoning_task == 'palindrome_partitioning':
-            data = reasoning_gym.create_dataset('palindrome_partitioning', size=10000,min_string_len=5,max_string_len=15,min_substring_palindrome_len=1,max_substring_palindrome_len=5,seed=42)
+            data = reasoning_gym.create_dataset('palindrome_partitioning', size=10000,min_string_len=5,max_string_len=15,min_substring_palindrome_len=1,max_substring_palindrome_len=5,seed=seed)
         elif reasoning_task == 'graph_color':
-            data = reasoning_gym.create_dataset('graph_color', size=10000,num_colors=4,min_num_vertices=10,max_num_vertices=30,seed=42)
+            data = reasoning_gym.create_dataset('graph_color', size=10000,num_colors=4,min_num_vertices=10,max_num_vertices=30,seed=seed)
         elif reasoning_task == 'family_relationships':
-            data = reasoning_gym.create_dataset('family_relationships', size=10000,min_family_size=6,max_family_size=16,seed=42)
+            data = reasoning_gym.create_dataset('family_relationships', size=10000,min_family_size=6,max_family_size=16,seed=seed)
         elif reasoning_task == 'number_sequence':
-            data = reasoning_gym.create_dataset('number_sequence', size=10000,max_complexity=3,min_value=-100,max_value=500,max_terms=8,min_terms=5,seed=42)
+            data = reasoning_gym.create_dataset('number_sequence', size=10000,max_complexity=3,min_value=-100,max_value=500,max_terms=8,min_terms=5,seed=seed)
         elif reasoning_task == 'shortest_path':
-            data = reasoning_gym.create_dataset('shortest_path', size=10000,seed=42,p_blocked=0.1,min_rows=3,min_cols=3,max_rows=8,max_cols=8)
+            data = reasoning_gym.create_dataset('shortest_path', size=10000,seed=seed,p_blocked=0.1,min_rows=3,min_cols=3,max_rows=8,max_cols=8)
         else:
             raise ValueError(f"Hard difficulty not implemented for {reasoning_task}")
     
