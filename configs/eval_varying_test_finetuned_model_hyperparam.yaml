@@ -1,0 +1,104 @@
+########### For determining the best hyperparameters for testing ###########
+# Important: For any hyperparameter that has a range, we set min and max to be the same value
+#   This allows us to greatly control the variance
+##########################################################################
+# Note: For all hyperparameters that have a range, we only specify the min
+num_problem_per_hyperparam: 25
+datasets:
+  - name: family_relationships
+    params:
+      ### 9 combinations
+      # Paper's min_family_size: easy=4, hard=5
+      # Paper's max_family_size: easy=8, hard=9
+      min_family_size: [4, 31, 2]  # 4 - 30 (x 14)
+  - name: shortest_path
+    params:
+      ### 9 combinations
+      # Paper's min_rows: easy=5, hard=25
+      # Paper's max_rows: easy=10, hard=50
+      # (Paper sets rows to columns)
+      min_rows: [5, 66, 30] # 5-65 (x 3)
+      min_cols: [5, 66, 30]   # 5-65 (x 3)
+  - name: graph_color
+    params:
+      ### 9 combinations (18)
+      # Paper's min_num_vertices: easy=10, hard=10
+      # Paper's max_num_vertices: easy=10, hard=20
+      min_num_vertices: [10, 31, 10]  # 10 - 30 (x 3)
+      # Paper's num_colors: easy=3, hard=4
+      num_colors: [3, 6, 1] # 3 - 5 (x 3)
+  - name: number_sequence
+    params:
+      ### 6 combinations
+      # Paper's min_terms: easy=4, hard=5
+      # Paper's max_terms: easy=8, hard=10
+      min_terms: [4, 13, 4] # 4-12 (x 3)
+      # Paper did not mention min_statements, but code set min=2 and max=4
+      # TODO: In the interest of time and compute, we will set this to a default range
+      # min_statements: [2, 5, 1] # 2-4 (x 3)
+      # Paper's min_value: easy=-100, hard=-500
+      # Paper's max_value: easy=100, hard=500
+      # Warning: We handle this differently compared to other params
+      #   because this specifies the range of value to each term, we set max to be abs(min)
+      min_value: [-500, -99, 400] # -500 - 100 (x 2)
+      # Paper didn't mention min_complexity
+      # Paper's max_complexity: easy=3, hard=3
+      max_complexity: [3, 4, 1] # 3 (x 1)
+  # TODO: We haven't experiemented with countdown yet. Skipping for now.
+  # - name: countdown
+  #   params:
+  #     min_numbers: [3, 6, 1] # 3-5 # (paper easy=4, hard=3)
+  #     max_numbers: [6, 11, 1] # 6-10 # (paper easy=6, hard=9)
+  #     min_target: [100, 101, 1] # 100-101 # (paper easy=100, hard=100)
+  #     max_target: [999, 1000, 1] # 999-1000 # (paper easy=999, hard=1000)
+  #     min_value: [1, 2, 1] # (paper easy=1, hard=1)
+  #     max_value: [100, 101, 1] # (paper easy=100, hard=100)
+  ########################################################
+  ## palindrome generation --> palindrome partitioning (partioning seems like a harder version of generation)
+  - name: palindrome_generation
+    params:
+      ### 7 combinations
+      # Paper's min_length: easy=3, hard=50
+      # Paper's max_length: easy=10, hard=100
+      # Note: We split the length investigation into 3-9 and 10-150 to handle different ranges
+      min_length_part_1: [3, 10, 3] # 3-9 (x 3)
+      min_length_part_2: [10, 151, 40] # 10-130 (x 4)
+  - name: palindrome_partitioning
+    params:
+      ### 12 combinations (26)
+      # Paper's min_string_len: easy=5 hard=5
+      # Paper's max_string_len: easy=15 hard=15
+      min_string_len: [5, 26, 10] # 5-25 (x 3)
+      # Paper's min_substring_palindrome_len: easy=1 hard=1
+      # Paper's max_substring_palindrome_len: easy=5 hard=5
+      # Warning: We handle this differently compared to other params
+      #   This controls the length of the substring palindrome. 
+      #   If we set min and max to be the same, all the substrings will be the same length
+      min_substring_palindrome_len: [1, 4, 2] # 1-3 (x 2)
+      max_substring_palindrome_len: [5, 10, 4] # 5-9 (x 2)
+  # - name: letter_jumble # Because it needs to reason about and manipulate the string in the same way
+  #   params:
+  #     ### 96 combinations
+  #     # Paper's min_word_len: easy=1, hard=5
+  #     # Paper's max_word_len: easy=64, hard=30 (what they wrote on paper: easy=64, hard=30. But we assume that the flipped is true)
+  #     # Warning: We handle this differently compared to other params
+  #     #   This controls the length of the word.
+  #     #   If we set min and max to be the same, all the words will be the same length
+  #     # Note: This scale is too large
+  #     # min_word_len: [1, 10, 4] # 1-9 (x 3)
+  #     # max_word_len: [30, 65, 17] # 30-64 (x3)
+  #     # Instead, we will stick with the range from the paper
+  #     min_word_len: [1, 6, 4] # 1-5 (x 2)
+  #     max_word_len: [30, 65, 34] # 30-64  (x 2)
+  #     # Paper's min_words: easy=3 hard=20
+  #     # Paper's max_words: easy=20 hard=50
+  #     # 6 in total
+  #     min_words_part_1: [3, 10, 3] # 3 - 9 (x 3)
+  #     min_words_part_2: [10, 51, 20] # 10 - 50 (x 3)
+  #     # Paper's min_corruption_level: easy=0.1 hard=0.3
+  #     # Paper's max_corruption_level: easy=0.6 hard=0.9 (what they wrote on paper: easy=0.9, hard=0.6. But we assume that the flipped is true)
+  #     # Warning: We handle this differently compared to other params
+  #     #   This controls the corruption level of the words.
+  #     #   If we set min and max to be the same, all the words will be the same corruption level
+  #     min_corruption_level: [0.1, 0.4, 0.2] # 0.1-0.3 (x 2)
+  #     max_corruption_level: [0.6, 1.0, 0.3] # 0.6-0.9 (x 2)

@@ -4,7 +4,8 @@ __pycache__/
 *$py.class
 dump/
 std/
-output/
+output*
+models/
 
 # C extensions
 *.so

@@ -32,9 +32,52 @@ random.seed(SEED)
 torch.manual_seed(SEED)
 torch.cuda.manual_seed_all(SEED)
 
+def validate_model_path(model_path: str) -> bool:
+    """
+    Validate if a model path exists (for local paths) or is accessible (for HuggingFace models).
+    
+    Args:
+        model_path: Path to the model (local or HuggingFace)
+    
+    Returns:
+        True if path is valid, False otherwise
+    """
+    # Check if it's a local path (contains 'models/' or starts with './' or is an absolute path)
+    if (model_path.startswith('models/') or 
+        model_path.startswith('./') or 
+        model_path.startswith('/') or 
+        (os.path.exists(model_path) and os.path.isdir(model_path))):
+        # Check if local path exists
+        if os.path.exists(model_path):
+            return True
+        else:
+            print(f"Warning: Local model path does not exist: {model_path}")
+            return False
+    else:
+        # Assume it's a HuggingFace model name - we'll let the loading function handle validation
+        return True
+
 def load_model(model_name: str, device: str):
-    model, tokenizer = llms.get_llm_tokenizer(model_name, device)
-    return model, tokenizer
+    """
+    Load a model and tokenizer from either HuggingFace or local path.
+    
+    Args:
+        model_name: Model name (HuggingFace) or local path
+        device: Device to load on
+    
+    Returns:
+        Tuple of (model, tokenizer)
+    """
+    # Validate the model path first
+    if not validate_model_path(model_name):
+        raise ValueError(f"Invalid model path: {model_name}")
+    
+    try:
+        model, tokenizer = llms.get_llm_tokenizer(model_name, device)
+        return model, tokenizer
+    except Exception as e:
+        print(f"Error loading model {model_name}: {e}")
+        raise
 
 def generate_hyperparam_sets(dataset_config: Dict, eval_mode: str) -> List[Dict]:
     """
@@ -108,15 +151,9 @@ def _generate_hyperparam_sets_train(param_ranges: Dict, dataset_name: str) -> Li
             if param_name.startswith('min_'):
                 max_param_name = param_name.replace('min_', 'max_')
                 if max_param_name in param_dict:
-                    if dataset_name in ["graph_color"]:
-                        # graph_color: min_num_vertices and max_num_vertices can be the same
-                        if param_dict[param_name] > param_dict[max_param_name]:
-                            valid = False
-                            break
-                    else:
-                        if param_dict[param_name] >= param_dict[max_param_name]:
-                            valid = False
-                            break
+                    if processed_dict[param_name] > processed_dict[max_param_name]:
+                        valid = False
+                        break
         
         if valid:
             hyperparam_sets.append(param_dict)
@@ -189,14 +226,32 @@ def _generate_hyperparam_sets_test(param_ranges: Dict, dataset_name: str) -> Lis
                         # For other datasets, we set max to be the same as min
                         processed_dict[max_param_name] = param_value
         
-        hyperparam_sets.append(processed_dict)
+        # Post processing to check for invalid combinations
+        # Filter out invalid combinations where min >= max for paired parameters
+        valid = True
+        completed_param_names = list(processed_dict.keys())
+        for param_name in completed_param_names:
+            if param_name.startswith('min_'):
+                max_param_name = param_name.replace('min_', 'max_')
+                if max_param_name in processed_dict:
+                    if processed_dict[param_name] > processed_dict[max_param_name]:
+                        print(f"Invalid combination: {param_name} = {processed_dict[param_name]} and {max_param_name} = {processed_dict[max_param_name]}")
+                        valid = False
+
+        if dataset_name == "palindrome_partitioning":
+            # Requires Maximum substring palindrome length must be less than or equal to maximum string length
+            valid = valid and (processed_dict["max_substring_palindrome_len"] <= processed_dict["max_string_len"])
+        
+        if valid:
+            print(processed_dict)
+            hyperparam_sets.append(processed_dict)
     
     return hyperparam_sets
     
 
 def eval_one_dataset(
     eval_mode: str,
-    model_name: str,
+    model_name_to_save: str,
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizerBase,
     dataset_evaluator: evaluator.RewardEvaluator,
@@ -210,7 +265,7 @@ def eval_one_dataset(
     Args:
         eval_mode: Mode of hyperparameter evaluation (train or test)
             Affects how hyperparameters are generated and loaded
-        model_name: Name of the model to evaluate
+        model_name_to_save: Name of the model to save the results to
         model: Model to evaluate
         tokenizer: Tokenizer for the model
         dataset_evaluator: Evaluator to use for the dataset
@@ -260,7 +315,7 @@ def eval_one_dataset(
     """
     # Determine output path
     dataset_name = dataset_config["name"]
-    output_path = os.path.join(output_dir, f"{dataset_name}_s={SEED}", model_name.split("/")[-1])
+    output_path = os.path.join(output_dir, f"{dataset_name}_s={SEED}", model_name_to_save)
     os.makedirs(output_path, exist_ok=True)
 
     # Determine the sets of hyperparmeters to eval on
@@ -275,6 +330,7 @@ def eval_one_dataset(
 
         for i in range(len(hyperparam_sets)):
             hyperparam_set = hyperparam_sets[i]
+            print(hyperparam_set)
             hyperparam_set_path = os.path.join(output_path, f"{'+'.join([f'{k}={v}' for k, v in hyperparam_set.items()])}")
             os.makedirs(hyperparam_set_path, exist_ok=True)
 
@@ -590,12 +646,22 @@ def plot_aggregated_results(dataset_config: Dict, aggregated_results: Dict, img_
         fig_metric.write_image(png_filepath, width=1200, height=600)
         print(f"PNG plot for {metric} saved to: {png_filepath}")
     
+def get_model_name_to_save(model_name: str) -> str:
+    """
+    Get the model name to save the results to
+    """
+    if "multi_task_rl_llms-" in model_name:
+        model_name_to_save = model_name.split("multi_task_rl_llms-")[-1]
+        model_name_to_save = "-".join(model_name_to_save.split("/"))
+        return model_name_to_save
+    else:
+        return model_name.split("/")[-1]
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-c", "--config", type=str, default="configs/eval_varying_train_hyperparam.yaml", help="Path to the config file. Contain (1) # of questions to eval per settting (2) List of datasets to eval on")
     parser.add_argument("-gc", "--generation_config", type=str, default="configs/eval_generation_config.yaml", help="Path to the generation config file")
-    parser.add_argument("-m", "--model", type=str, default="Qwen/Qwen2.5-7B-Instruct", help="Path to the model to evaluate on")
+    parser.add_argument("-m", "--models", nargs="+", default=["Qwen/Qwen2.5-7B-Instruct"], help="List of model paths to evaluate on. Can be HuggingFace model names (e.g., 'Qwen/Qwen2.5-7B-Instruct') or local paths to downloaded models (e.g., 'models/multi_task_rl_llms-family_relationships/multi_task_rl_llms-family_relationships/checkpoint_1000')")
     parser.add_argument("-o", "--output_dir", type=str, default="output", help="Directory to save the evaluation results")
     parser.add_argument("-p", "--plot_eval", action="store_true", default=False, help="Whether to plot the evaluation results")
     args = parser.parse_args()
@@ -613,60 +679,67 @@ if __name__ == "__main__":
     # Detect the device to use
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # Load agents to evaluate on
-    print(f"\033[32mLoading model: {args.model}\033[0m")
-    model, tokenizer = load_model(args.model, device)
-    model.eval()
-    # Verify model size and basic config
-    try:
-        total_params = model.num_parameters()
-    except Exception:
-        total_params = sum(p.numel() for p in model.parameters())
-    try:
-        mem_bytes = model.get_memory_footprint()
-    except Exception:
-        mem_bytes = None
-    def _fmt_count(n):
-        return f"{n/1e9:.2f}B" if n >= 1e9 else (f"{n/1e6:.2f}M" if n >= 1e6 else (f"{n/1e3:.2f}K" if n >= 1e3 else str(n)))
-    if mem_bytes is not None:
-        print(f"\033[36mModel params: {_fmt_count(total_params)}, memory footprint: {mem_bytes/1024/1024/1024:.2f} GiB\033[0m")
-    else:
-        print(f"\033[36mModel params: {_fmt_count(total_params)}\033[0m")
-    hidden_size = getattr(model.config, "hidden_size", None)
-    num_layers = getattr(model.config, "num_hidden_layers", None)
-    if hidden_size is not None and num_layers is not None:
-        print(f"\033[36mConfig: hidden_size={hidden_size}, num_layers={num_layers}\033[0m")
-
     output_dir = os.path.join(args.output_dir, "reasoning_gym")
 
-    for dataset_config in config["datasets"]:
-        # Load evaluator
-        dataset_evaluator = evaluator.get_evaluator(f"{dataset_config['name']}.reasoning_gym")  # Need to add .reasoning_gym to be compatible with the evaluator
+    # Iterate over all models
+    print(f"\033[33mModels to evaluate: {args.models}\033[0m")
 
-        # Extract the dataset name and merge params into the config
-        dataset_name = dataset_config["name"]
-        dataset_params = dataset_config.get("params", {})
-        full_dataset_config = {"name": dataset_name, **dataset_params}
+    for model_name in args.models:
+        print(f"\033[32mLoading model: {model_name}\033[0m")
+        model_name_to_save = get_model_name_to_save(model_name)
+        print(f"\033[32mModel name to save: {model_name_to_save}\033[0m")
+
+        model, tokenizer = load_model(model_name, device)
+        model.eval()
         
-        # Evaluate model on this dataset configuration
-        all_aggregated_results = eval_one_dataset(
-            eval_mode=mode,
-            model_name=args.model,
-            model=model, 
-            tokenizer=tokenizer,
-            dataset_evaluator=dataset_evaluator,
-            dataset_config=full_dataset_config,
-            model_generation_config=generation_config,
-            num_problem_per_hyperparam=config["num_problem_per_hyperparam"],
-            output_dir=output_dir,
-            device=device
-        )
-        
-        if args.plot_eval:
-            # Generate interactive parallel coordinates plot
-            img_save_path = os.path.join(output_dir, f"{dataset_name}_s={SEED}", args.model.split("/")[-1])
-            html_save_path = os.path.join(output_dir, "_consolidated_html", args.model.split("/")[-1])
-            plot_aggregated_results(full_dataset_config, all_aggregated_results, img_save_path, html_save_path)
+        # Verify model size and basic config
+        try:
+            total_params = model.num_parameters()
+        except Exception:
+            total_params = sum(p.numel() for p in model.parameters())
+        try:
+            mem_bytes = model.get_memory_footprint()
+        except Exception:
+            mem_bytes = None
+        def _fmt_count(n):
+            return f"{n/1e9:.2f}B" if n >= 1e9 else (f"{n/1e6:.2f}M" if n >= 1e6 else (f"{n/1e3:.2f}K" if n >= 1e3 else str(n)))
+        if mem_bytes is not None:
+            print(f"\033[36mModel params: {_fmt_count(total_params)}, memory footprint: {mem_bytes/1024/1024/1024:.2f} GiB\033[0m")
+        else:
+            print(f"\033[36mModel params: {_fmt_count(total_params)}\033[0m")
+        hidden_size = getattr(model.config, "hidden_size", None)
+        num_layers = getattr(model.config, "num_hidden_layers", None)
+        if hidden_size is not None and num_layers is not None:
+            print(f"\033[36mConfig: hidden_size={hidden_size}, num_layers={num_layers}\033[0m")
+
+        for dataset_config in config["datasets"]:
+            # Load evaluator
+            dataset_evaluator = evaluator.get_evaluator(f"{dataset_config['name']}.reasoning_gym")  # Need to add .reasoning_gym to be compatible with the evaluator
+
+            # Extract the dataset name and merge params into the config
+            dataset_name = dataset_config["name"]
+            dataset_params = dataset_config.get("params", {})
+            full_dataset_config = {"name": dataset_name, **dataset_params}
+            
+            # Evaluate model on this dataset configuration
+            all_aggregated_results = eval_one_dataset(
+                eval_mode=mode,
+                model_name_to_save=model_name_to_save,
+                model=model, 
+                tokenizer=tokenizer,
+                dataset_evaluator=dataset_evaluator,
+                dataset_config=full_dataset_config,
+                model_generation_config=generation_config,
+                num_problem_per_hyperparam=config["num_problem_per_hyperparam"],
+                output_dir=output_dir,
+                device=device
+            )
+            
+            if args.plot_eval:
+                # Generate interactive parallel coordinates plot
+                img_save_path = os.path.join(output_dir, f"{dataset_name}_s={SEED}", model_name_to_save)
+                html_save_path = os.path.join(output_dir, "_consolidated_html", model_name_to_save)
+                plot_aggregated_results(full_dataset_config, all_aggregated_results, img_save_path, html_save_path)
 
 
 
